@@ -1,0 +1,88 @@
+# cargo-deny configuration — enforces the privacy guarantees at build time.
+# Run with: cargo deny check
+#
+# This file is the technical enforcement of the "zero telemetry" guarantee.
+# It blocks known telemetry/analytics/crash-reporting crates from ever being
+# added to the dependency graph, and it forbids native-tls (which can leak the
+# user's system trust store and is harder to audit than rustls).
+
+[graph]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ── Advisories ───────────────────────────────────────────────────────────────
+[advisories]
+db-path     = "~/.cargo/advisory-db"
+db-urls     = ["https://github.com/rustsec/advisory-db"]
+yanked      = "warn"
+ignore      = []
+
+# ── Licenses ─────────────────────────────────────────────────────────────────
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Zlib",
+    "OpenSSL",
+    "BSL-1.0",
+]
+confidence-threshold = 0.93
+exceptions = []
+
+# ── Bans ─────────────────────────────────────────────────────────────────────
+[bans]
+multiple-versions  = "warn"
+wildcards          = "deny"
+highlight          = "all"
+allow              = []
+
+# Telemetry / analytics / crash-reporting crates — banned.
+# This list is the technical enforcement of the "zero telemetry" guarantee.
+deny = [
+    { name = "sentry"           },
+    { name = "sentry-core"      },
+    { name = "sentry-types"     },
+    { name = "segment"          },
+    { name = "amplitude"        },
+    { name = "amplitude-rs"     },
+    { name = "crashlytics"      },
+    { name = "datadog"          },
+    { name = "datadog-statsd"   },
+    { name = "rollbar"          },
+    { name = "rollbar-rs"       },
+    { name = "honeycomb"        },
+    { name = "posthog-rs"       },
+    { name = "mixpanel"         },
+    { name = "newrelic"         },
+
+    # TLS — force rustls.
+    { name = "native-tls"       },
+    { name = "openssl"          },
+    { name = "openssl-sys"      },
+
+    # Older / unmaintained — prefer alternatives.
+    { name = "time", version = "<0.3" },
+]
+
+skip = [
+    # Dioxus + sqlx pull duplicate versions of tiny utility crates — track upstream.
+]
+
+skip-tree = []
+
+# ── Sources ──────────────────────────────────────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]
+allow-git        = []

@@ -1,0 +1,125 @@
+[package]
+name          = "sonitus-core"
+version       = { workspace = true }
+edition       = { workspace = true }
+rust-version  = { workspace = true }
+authors       = { workspace = true }
+license       = { workspace = true }
+repository    = { workspace = true }
+description   = "Core library for Sonitus — DB, crypto, audio, sources, privacy."
+
+[features]
+default = ["all-sources"]
+all-sources = ["s3", "smb"]
+s3  = ["dep:aws-sdk-s3", "dep:aws-config"]
+smb = ["dep:pavao"]
+
+[dependencies]
+sonitus-meta        = { workspace = true }
+
+# Audio
+symphonia           = { workspace = true }
+
+# Async
+tokio               = { workspace = true }
+tokio-util          = { workspace = true }
+async-trait         = { workspace = true }
+futures             = { workspace = true }
+
+# HTTP
+reqwest             = { workspace = true }
+reqwest-middleware  = { workspace = true }
+
+# DB
+sqlx                = { workspace = true }
+
+# Serialization
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+toml                = { workspace = true }
+
+# Audio metadata
+id3                 = { workspace = true }
+metaflac            = { workspace = true }
+
+# FS
+walkdir             = { workspace = true }
+notify              = { workspace = true }
+dirs                = { workspace = true }
+tempfile            = { workspace = true }
+
+# Errors
+anyhow              = { workspace = true }
+thiserror           = { workspace = true }
+
+# Logging
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+
+# Utils
+uuid                = { workspace = true }
+chrono              = { workspace = true }
+bytes               = { workspace = true }
+base64              = { workspace = true }
+url                 = { workspace = true }
+strum               = { workspace = true }
+parking_lot         = { workspace = true }
+once_cell           = { workspace = true }
+dashmap             = { workspace = true }
+crossbeam-channel   = { workspace = true }
+
+# OAuth
+oauth2              = { workspace = true }
+
+# Optional cloud SDKs (gated by features)
+aws-sdk-s3          = { workspace = true, optional = true }
+aws-config          = { workspace = true, optional = true }
+pavao               = { workspace = true, optional = true }
+
+# Hashing
+blake3              = { workspace = true }
+
+# Crypto
+chacha20poly1305    = { workspace = true }
+aes-gcm             = { workspace = true }
+argon2              = { workspace = true }
+zeroize             = { workspace = true }
+rand                = { workspace = true }
+getrandom           = { workspace = true }
+sha2                = { workspace = true }
+
+# Native audio output (excluded from wasm; web uses web-sys instead)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal                = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = [
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "AudioWorkletNode",
+    "GainNode",
+    "Window",
+] }
+wasm-bindgen        = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys              = "0.3"
+
+[dev-dependencies]
+tokio-test          = { workspace = true }
+tempfile            = { workspace = true }
+mockall             = { workspace = true }
+proptest            = { workspace = true }
+criterion           = { workspace = true }
+
+[[bench]]
+name    = "scanner_bench"
+harness = false
+
+[[bench]]
+name    = "crypto_bench"
+harness = false

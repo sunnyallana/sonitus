@@ -1,0 +1,2 @@
+# Place Inter-Variable.woff2 here (downloadable from rsms.me/inter).
+# CI release jobs fetch the font during the build.

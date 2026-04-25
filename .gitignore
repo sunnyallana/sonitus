@@ -1,0 +1,64 @@
+/target/
+**/*.rs.bk
+*.pdb
+
+# Build artifacts
+/dist/
+/out/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local user data — must NEVER be committed.
+*.sonitus
+*.salt
+audit.log
+audit.log.*
+
+# Sonitus runtime caches
+.sonitus-cache/
+sonitus-data/
+
+# dx (Dioxus CLI) build cache
+/.dioxus/
+
+# Android / iOS build outputs
+*.apk
+*.aab
+*.ipa
+*.app
+
+# Code signing identities — must never be committed.
+*.p12
+*.mobileprovision
+keystore.jks
+release.keystore
+
+# sccache stats
+sccache.log
+
+# Coverage
+*.profraw
+/coverage/
+/lcov.info
+
+# Editor swap files
+*.swp
+*.swo
+
+# Local environment overrides
+.env
+.env.local
+
+# Claude Code / AI assistant local state
+.claude/
+CLAUDE.local.md
+.aider*
+.cursor/

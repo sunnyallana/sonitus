@@ -1,0 +1,77 @@
+name: Release — Android
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;26.1.10909125"
+
+      - name: Install dx
+        run: cargo install dioxus-cli --locked
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bundle Android release
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+        run: dx bundle --platform android --release
+
+      - name: Sign AAB
+        if: github.event_name == 'push'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euxo pipefail
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+            for f in dist/*.aab; do
+              jarsigner -keystore /tmp/release.keystore \
+                        -storepass "$KEYSTORE_PASSWORD" \
+                        -keypass "$KEY_PASSWORD" \
+                        "$f" "$KEY_ALIAS"
+            done
+          fi
+
+      - name: Upload to Play Store (closed track)
+        if: github.event_name == 'push'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "$PLAY_SERVICE_ACCOUNT_JSON" > /tmp/play-key.json
+            gem install fastlane --no-document
+            fastlane supply --json_key /tmp/play-key.json --aab dist/*.aab --track internal
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonitus-android
+          path: |
+            dist/*.aab
+            dist/*.apk

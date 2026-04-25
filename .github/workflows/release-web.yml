@@ -1,0 +1,52 @@
+name: Release — Web (PWA)
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Dioxus CLI + wasm-opt
+        run: |
+          cargo install dioxus-cli --locked
+          npm install -g wasm-opt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bundle web release
+        run: dx bundle --platform web --release
+
+      - name: Optimize WASM with wasm-opt
+        run: |
+          set -euxo pipefail
+          for f in $(find dist -name "*.wasm"); do
+            wasm-opt -Oz "$f" -o "$f.opt"
+            mv "$f.opt" "$f"
+          done
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

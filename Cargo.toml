@@ -1,0 +1,140 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sonitus-core",
+    "crates/sonitus-meta",
+    "crates/sonitus-ui",
+]
+
+[workspace.package]
+version       = "0.1.0"
+edition       = "2024"
+rust-version  = "1.85"
+authors       = ["Sonitus Contributors"]
+license       = "MIT"
+repository    = "https://github.com/sonitus/sonitus"
+homepage      = "https://sonitus.app"
+description   = "Local-first, encrypted, cross-platform music streaming and library management."
+
+[workspace.dependencies]
+# ── Internal crates ──────────────────────────────────────────────────────────
+sonitus-core = { path = "crates/sonitus-core", version = "0.1.0" }
+sonitus-meta = { path = "crates/sonitus-meta", version = "0.1.0" }
+
+# ── UI (Dioxus 0.7.6) ────────────────────────────────────────────────────────
+dioxus              = { version = "0.7.6", features = ["fullstack", "router"] }
+dioxus-desktop      = { version = "0.7.6" }
+dioxus-web          = { version = "0.7.6" }
+dioxus-mobile       = { version = "0.7.6" }
+dioxus-sdk          = { version = "0.7.0", features = ["storage"] }
+
+# ── Audio ─────────────────────────────────────────────────────────────────────
+symphonia           = { version = "0.6.0-alpha.1", features = ["all-formats", "all-codecs", "opt-simd"] }
+cpal                = { version = "0.15.3" }
+
+# ── Async runtime ─────────────────────────────────────────────────────────────
+tokio               = { version = "1.44", features = ["full"] }
+tokio-util          = { version = "0.7",  features = ["codec", "io"] }
+async-trait         = { version = "0.1" }
+futures             = { version = "0.3" }
+
+# ── HTTP — rustls-tls ONLY ────────────────────────────────────────────────────
+reqwest             = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-tls", "multipart", "gzip"] }
+reqwest-middleware  = { version = "0.4" }
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlx                = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate", "uuid", "chrono"] }
+
+# ── Serialization ─────────────────────────────────────────────────────────────
+serde               = { version = "1.0",  features = ["derive"] }
+serde_json          = { version = "1.0" }
+toml                = { version = "0.8",  features = ["preserve_order"] }
+
+# ── Audio metadata ────────────────────────────────────────────────────────────
+id3                 = { version = "1.15" }
+metaflac            = { version = "0.2" }
+
+# ── Filesystem ────────────────────────────────────────────────────────────────
+walkdir             = { version = "2.5" }
+notify              = { version = "8.0", features = ["serde"] }
+dirs                = { version = "6.0" }
+tempfile            = { version = "3.15" }
+
+# ── Errors ────────────────────────────────────────────────────────────────────
+anyhow              = { version = "1.0" }
+thiserror           = { version = "2.0" }
+
+# ── Logging / tracing ─────────────────────────────────────────────────────────
+tracing             = { version = "0.1" }
+tracing-subscriber  = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+uuid                = { version = "1.11", features = ["v4", "serde"] }
+chrono              = { version = "0.4",  features = ["serde"] }
+bytes               = { version = "1.9" }
+base64              = { version = "0.22" }
+url                 = { version = "2.5",  features = ["serde"] }
+strum               = { version = "0.27", features = ["derive"] }
+parking_lot         = { version = "0.12" }
+once_cell           = { version = "1.20" }
+dashmap             = { version = "6.1" }
+crossbeam-channel   = { version = "0.5" }
+
+# ── Cloud auth ────────────────────────────────────────────────────────────────
+oauth2              = { version = "5.0" }
+aws-sdk-s3          = { version = "1.79" }
+aws-config          = { version = "1.6" }
+
+# ── SMB ───────────────────────────────────────────────────────────────────────
+pavao               = { version = "0.2", features = ["vendored"] }
+
+# ── Hashing ───────────────────────────────────────────────────────────────────
+blake3              = { version = "1.5" }
+
+# ── Cryptography (pure Rust) ──────────────────────────────────────────────────
+chacha20poly1305    = { version = "0.10.1", features = ["xchacha20poly1305"] }
+aes-gcm             = { version = "0.10.3", features = ["aes"] }
+argon2              = { version = "0.5.3",  features = ["zeroize"] }
+zeroize             = { version = "1.8",    features = ["derive", "zeroize_derive"] }
+rand                = { version = "0.9",    features = ["getrandom"] }
+getrandom           = { version = "0.3" }
+sha2                = { version = "0.10" }
+
+# ── Dev / test ────────────────────────────────────────────────────────────────
+tokio-test          = { version = "0.4" }
+mockall             = { version = "0.13" }
+proptest            = { version = "1.6" }
+criterion           = { version = "0.5", features = ["async_tokio"] }
+
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"
+
+[profile.dev]
+opt-level     = 1
+debug         = true
+incremental   = true
+
+# Optimize crypto and audio dependencies even in dev — debugging encrypted/audio
+# code with -O0 is unworkable (Argon2 takes minutes; audio underruns constantly).
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+[profile.dev.package.aes-gcm]
+opt-level = 3
+[profile.dev.package.symphonia]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 3
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+[profile.dev.package.symphonia-codec-vorbis]
+opt-level = 3
+[profile.dev.package.cpal]
+opt-level = 3
+[profile.dev.package.blake3]
+opt-level = 3

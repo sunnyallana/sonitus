@@ -1,0 +1,28 @@
+# Faster linking on Linux — clang + lld cuts incremental link times ~5x.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# WASM build — required for Dioxus web target.
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+]
+
+[build]
+# rustc tries to use the host's toolchain by default; pin jobs for predictable CI.
+# jobs = 0 means "all available cores".
+
+[net]
+git-fetch-with-cli = true
+
+[alias]
+# `cargo xtest` — run the workspace test suite the way CI does.
+xtest = "test --workspace --all-features --no-fail-fast"
+xlint = "clippy --workspace --all-targets --all-features -- -D warnings"
+xfmt  = "fmt --all"
+xdeny = "deny check"

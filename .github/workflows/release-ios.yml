@@ -1,0 +1,46 @@
+name: Release — iOS
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-ios,x86_64-apple-ios
+
+      - name: Install dx
+        run: cargo install dioxus-cli --locked
+
+      - name: Install fastlane
+        run: |
+          gem install fastlane --no-document
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bundle iOS release
+        run: dx bundle --platform ios --release
+
+      - name: Upload to TestFlight
+        if: github.event_name == 'push'
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+        run: |
+          if [ -n "$APP_STORE_CONNECT_API_KEY_ID" ]; then
+            fastlane pilot upload --ipa dist/*.ipa
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonitus-ios.ipa
+          path: dist/*.ipa
