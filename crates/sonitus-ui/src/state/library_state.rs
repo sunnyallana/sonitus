@@ -23,6 +23,11 @@ pub struct LibraryState {
     pub scan_progress: std::collections::HashMap<String, ScanProgress>,
     /// Last error encountered loading the library, if any.
     pub last_error: Option<String>,
+    /// Bumped every time the orchestrator writes to the DB (track
+    /// duration backfill, scan completion, etc.). Components that query
+    /// the DB via `use_resource` should read this inside their closure
+    /// to subscribe; the resource then re-runs after writes.
+    pub version: u64,
 }
 
 /// Install a `Signal<LibraryState>` into the context.

@@ -62,6 +62,8 @@ parking_lot         = { workspace = true }
 once_cell           = { workspace = true }
 dirs                = { workspace = true }
 crossbeam-channel   = { workspace = true }
+# Native file/folder picker (Win32 IFileDialog, Cocoa NSOpenPanel, GTK on Linux).
+rfd                 = "0.15"
 
 [dev-dependencies]
 tokio-test          = { workspace = true }

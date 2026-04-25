@@ -11,7 +11,7 @@
 //! files are added; deleted files are removed; existing files are
 //! re-checked only if their mtime or size differs from what's in the DB.
 
-use crate::error::Result;
+use crate::error::{Result, SonitusError};
 use crate::library::{
     models::{Album, Artist, ScanState, Track, TrackFormat},
     queries,
@@ -21,6 +21,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// How many bytes to read per file for tag parsing + content hashing.
+/// 256 KiB is enough for ID3 + FLAC headers + Vorbis comments + embedded
+/// cover art, while keeping scan I/O ~8x lower than reading 2 MiB.
+const PER_FILE_READ_BUDGET: usize = 256 * 1024;
 
 /// Aggregated outcome of a scan, returned when the scan completes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -40,7 +45,7 @@ pub struct ScanReport {
 }
 
 /// Streaming progress event emitted while a scan runs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanProgress {
     /// Source ID being scanned.
     pub source_id: String,
@@ -87,65 +92,89 @@ impl Scanner {
                 .map(|t| (t.remote_path.clone(), t))
                 .collect();
 
-        let files = match self.source.list_files().await {
-            Ok(f) => f,
-            Err(e) => {
-                queries::sources::set_scan_state(
-                    &self.pool,
-                    &source_id,
-                    ScanState::Error,
-                    Some(&e.to_string()),
-                )
-                .await?;
-                return Err(e);
-            }
-        };
-        report.files_seen = files.len() as u64;
+        tracing::info!(source_id = %source_id, "scan: starting");
 
+        // Initial heartbeat so the wizard stops showing "Discovering files..."
+        // immediately, even before the first file lands.
         let _ = progress
             .send(ScanProgress {
                 source_id: source_id.clone(),
-                files_seen: report.files_seen,
+                files_seen: 0,
                 tracks_indexed: 0,
                 files_failed: 0,
-                current_file: None,
+                current_file: Some("(walking directory tree)".into()),
             })
             .await;
 
-        for file in files {
-            let _ = progress
-                .send(ScanProgress {
-                    source_id: source_id.clone(),
-                    files_seen: report.files_seen,
-                    tracks_indexed: report.tracks_added + report.tracks_updated,
-                    files_failed: report.files_failed,
-                    current_file: Some(file.path.clone()),
-                })
-                .await;
+        // Stream files from the source. The bounded channel gives us
+        // back-pressure: if processing falls behind discovery, the walker
+        // pauses (rather than ballooning memory on a million-file library).
+        let (file_tx, mut file_rx) = tokio::sync::mpsc::channel::<RemoteFile>(64);
 
-            still_present.insert(file.path.clone());
+        // Drive discovery and consumption in the same future via tokio::join.
+        // We deliberately avoid `tokio::spawn` here: the scanner is invoked
+        // from inside Dioxus's local task pool, and tokio::spawn from
+        // there can race with runtime shutdown. join! keeps everything on
+        // the caller's executor.
+        let source = self.source.clone();
+        let discover_fut = async move {
+            let r = source.discover(file_tx).await;
+            tracing::info!(?r, "scan: discover finished");
+            r
+        };
 
-            // Cheap unchanged check: mtime + size match → skip parse.
-            if let Some(existing) = pre_existing.get(&file.path) {
-                let unchanged = existing.file_size_bytes == Some(file.size_bytes as i64);
-                if unchanged {
-                    continue;
-                }
-            }
+        let consume_fut = async {
+            while let Some(file) = file_rx.recv().await {
+                tracing::debug!(path = %file.path, "scan: got file");
+                report.files_seen += 1;
+                still_present.insert(file.path.clone());
 
-            match self.process_file(&source_id, &file).await {
-                Ok(was_new) => {
-                    if was_new {
-                        report.tracks_added += 1;
-                    } else {
-                        report.tracks_updated += 1;
+                let _ = progress
+                    .send(ScanProgress {
+                        source_id: source_id.clone(),
+                        files_seen: report.files_seen,
+                        tracks_indexed: report.tracks_added + report.tracks_updated,
+                        files_failed: report.files_failed,
+                        current_file: Some(file.path.clone()),
+                    })
+                    .await;
+
+                // Cheap unchanged check: size matches → skip the byte-read + tag parse.
+                if let Some(existing) = pre_existing.get(&file.path) {
+                    if existing.file_size_bytes == Some(file.size_bytes as i64) {
+                        continue;
                     }
                 }
-                Err(e) => {
-                    report.files_failed += 1;
-                    tracing::warn!(path = %file.path, error = %e, "scan: failed to process file");
+
+                match self.process_file(&source_id, &file).await {
+                    Ok(was_new) => {
+                        if was_new {
+                            report.tracks_added += 1;
+                        } else {
+                            report.tracks_updated += 1;
+                        }
+                    }
+                    Err(e) => {
+                        report.files_failed += 1;
+                        tracing::warn!(path = %file.path, error = %e, "scan: failed to process file");
+                    }
                 }
             }
+            Ok::<(), SonitusError>(())
+        };
+
+        let (discover_result, _consume_result) = tokio::join!(discover_fut, consume_fut);
+
+        if let Err(e) = discover_result {
+            tracing::warn!(error = %e, "scan: discover errored");
+            queries::sources::set_scan_state(
+                &self.pool,
+                &source_id,
+                ScanState::Error,
+                Some(&e.to_string()),
+            )
+            .await?;
+            return Err(e);
         }
 
         // Detect deletions.
@@ -168,7 +197,7 @@ impl Scanner {
     async fn process_file(&self, source_id: &str, file: &RemoteFile) -> Result<bool> {
         // Read enough bytes for ID3/FLAC headers. 1 MiB is plenty for any
         // tagging format — 2 MiB catches outsized cover art.
-        let bytes = self.source.read_bytes(&file.path, 2 * 1024 * 1024).await?;
+        let bytes = self.source.read_bytes(&file.path, PER_FILE_READ_BUDGET).await?;
 
         let parsed = crate::metadata::tags::parse(&file.path, &bytes)
             .unwrap_or_else(|_| crate::metadata::tags::ParsedTags::guess_from_filename(&file.path));

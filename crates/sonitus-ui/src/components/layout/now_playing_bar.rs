@@ -12,8 +12,24 @@ use dioxus::prelude::*;
 pub fn NowPlayingBar() -> Element {
     let player = use_player();
     let state = player.read();
-    let Some(track) = state.track else {
-        return rsx! { div { class: "now-playing-bar now-playing-bar--empty" } };
+
+    // When no track is loaded, render a clearly visible idle bar so the
+    // user can see where playback controls *will* appear, plus surface
+    // any error from the engine.
+    let Some(track) = state.track.clone() else {
+        return rsx! {
+            div { class: "now-playing-bar now-playing-bar--idle",
+                role: "region",
+                aria_label: "Player (idle)",
+                div { class: "now-playing-bar__idle-text",
+                    if let Some(err) = &state.last_error {
+                        span { class: "now-playing-bar__error", "Player error: {err}" }
+                    } else {
+                        span { "Nothing playing — double-click a track or hit ▶ on a row to start." }
+                    }
+                }
+            }
+        };
     };
 
     rsx! {
@@ -28,7 +44,7 @@ pub fn NowPlayingBar() -> Element {
                 div { class: "now-playing-bar__meta",
                     div { class: "now-playing-bar__title", "{track.title}" }
                     div { class: "now-playing-bar__sub",
-                        if let Some(_aid) = track.artist_id { "—" } else { "" }
+                        if let Some(_aid) = &track.artist_id { "—" } else { "" }
                     }
                 }
             }

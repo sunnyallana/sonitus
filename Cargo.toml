@@ -32,8 +32,14 @@ dioxus-mobile       = { version = "0.7.0-alpha.2" }
 dioxus-sdk          = { version = "0.7.0", features = ["storage"] }
 
 # ── Audio ─────────────────────────────────────────────────────────────────────
-symphonia           = { version = "0.6.0-alpha.2", features = ["all-formats", "all-codecs", "opt-simd"] }
+# Pinned to 0.5.5 (last stable). 0.6 is in alpha and reorganized the
+# codec/probe APIs in incompatible ways; we'll migrate when 0.6 lands.
+symphonia           = { version = "0.5.5", features = ["all-formats", "all-codecs", "opt-simd"] }
 cpal                = { version = "0.15.3" }
+# Real-time SRC (sample-rate conversion). Pure Rust, well-maintained.
+# Without resampling, files at non-default rates (e.g. 44.1 kHz mp3 on a
+# 48 kHz Windows device) get pitch-shifted ~9% by the audio device.
+rubato              = "0.16"
 
 # ── Async runtime ─────────────────────────────────────────────────────────────
 tokio               = { version = "1.44", features = ["full"] }

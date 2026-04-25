@@ -43,6 +43,10 @@ impl SourceProvider for LocalSource {
     fn kind(&self) -> SourceKind { SourceKind::Local }
     fn name(&self) -> &str { &self.name }
 
+    fn local_path(&self, path: &str) -> Option<std::path::PathBuf> {
+        Some(self.resolve(path))
+    }
+
     async fn ping(&self) -> Result<()> {
         if !self.root.exists() {
             return Err(SonitusError::PathNotFound(self.root.clone()));
@@ -57,26 +61,61 @@ impl SourceProvider for LocalSource {
     }
 
     async fn list_files(&self) -> Result<Vec<RemoteFile>> {
+        // Same walk as `discover`, but drains into a Vec at the end.
         let root = self.root.clone();
-        // walkdir is sync and cpu-bound; spawn_blocking keeps the runtime free.
-        let files = tokio::task::spawn_blocking(move || {
-            let mut out = Vec::new();
+        let files = tokio::task::spawn_blocking(move || walk_audio_files(&root))
+            .await
+            .map_err(|e| SonitusError::Source { kind: "local", message: e.to_string() })?;
+        Ok(files)
+    }
+
+    /// Streaming discovery: emits each audio file as walkdir surfaces it,
+    /// so the scanner can begin processing immediately rather than waiting
+    /// for the full tree walk to finish. Skips the second `fs::metadata`
+    /// call by reusing the dirent metadata walkdir already loaded.
+    async fn discover(&self, tx: tokio::sync::mpsc::Sender<RemoteFile>) -> Result<()> {
+        let root = self.root.clone();
+        tracing::info!(root = %root.display(), "local: starting discover walk");
+        let join = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let mut emitted: u64 = 0;
+            let mut visited: u64 = 0;
             for entry in WalkDir::new(&root).follow_links(false).into_iter() {
-                let Ok(entry) = entry else { continue; };
-                if !entry.file_type().is_file() { continue; }
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "local: walkdir entry error; skipping");
+                        continue;
+                    }
+                };
+                visited += 1;
+                if !entry.file_type().is_file() {
+                    continue;
+                }
                 let p = entry.path();
                 let ext = p
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_ascii_lowercase());
-                let Some(ref ext) = ext else { continue; };
-                if TrackFormat::from_extension(ext).is_none() { continue; }
-                let meta = match std::fs::metadata(p) {
-                    Ok(m) => m,
-                    Err(_) => continue,
+                let Some(ref ext) = ext else {
+                    continue;
                 };
-                let path_rel = p.strip_prefix(&root).unwrap_or(p).to_string_lossy().to_string();
-                out.push(RemoteFile {
+                if TrackFormat::from_extension(ext).is_none() {
+                    continue;
+                }
+                // Reuse walkdir's dirent metadata; saves one stat per file.
+                let meta = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!(path = %p.display(), error = %e, "local: metadata error; skipping");
+                        continue;
+                    }
+                };
+                let path_rel = p
+                    .strip_prefix(&root)
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .to_string();
+                let file = RemoteFile {
                     path: format!("/{}", path_rel.replace('\\', "/")),
                     size_bytes: meta.len(),
                     modified_at: meta
@@ -85,13 +124,22 @@ impl SourceProvider for LocalSource {
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs() as i64),
                     mime_hint: None,
-                });
+                };
+                // blocking_send blocks this dedicated spawn_blocking thread
+                // when the channel fills, giving back-pressure without a
+                // tokio runtime call from inside the closure.
+                if tx.blocking_send(file).is_err() {
+                    tracing::warn!("local: receiver dropped; aborting walk");
+                    break;
+                }
+                emitted += 1;
             }
-            out
-        })
-        .await
-        .map_err(|e| SonitusError::Source { kind: "local", message: e.to_string() })?;
-        Ok(files)
+            tracing::info!(visited, emitted, "local: walk done");
+            Ok(emitted)
+        });
+        join.await
+            .map_err(|e| SonitusError::Source { kind: "local", message: e.to_string() })??;
+        Ok(())
     }
 
     async fn stream(
@@ -153,6 +201,46 @@ impl SourceProvider for LocalSource {
         file.read_exact(&mut buf).await?;
         Ok(Bytes::from(buf))
     }
+}
+
+/// Synchronous walkdir helper shared by `list_files` and `discover`.
+/// Pulls audio file metadata from dirents in a single pass.
+fn walk_audio_files(root: &std::path::Path) -> Vec<RemoteFile> {
+    let mut out = Vec::new();
+    for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let p = entry.path();
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        let Some(ref ext) = ext else { continue; };
+        if TrackFormat::from_extension(ext).is_none() {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let path_rel = p
+            .strip_prefix(root)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .to_string();
+        out.push(RemoteFile {
+            path: format!("/{}", path_rel.replace('\\', "/")),
+            size_bytes: meta.len(),
+            modified_at: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64),
+            mime_hint: None,
+        });
+    }
+    out
 }
 
 #[cfg(test)]

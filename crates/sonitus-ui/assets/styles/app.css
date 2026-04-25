@@ -126,6 +126,10 @@ input:focus, select:focus, textarea:focus {
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 
 .sidebar {
+    /* Pin the sidebar at its full width — flex-shrink: 0 prevents the
+       layout from squeezing it when the page content (e.g. a wide
+       tracks table) overflows. width + flex-basis give a stable size. */
+    flex: 0 0 var(--sidebar-width);
     width: var(--sidebar-width);
     background: var(--color-bg-alt);
     border-right: 1px solid var(--color-divider);
@@ -298,20 +302,74 @@ input:focus, select:focus, textarea:focus {
 
 .seekbar__time { font-size: 11px; font-family: var(--font-mono); color: var(--color-fg-mute); min-width: 36px; }
 
-.seekbar__track {
+.seekbar__bar {
+    position: relative;
     flex: 1 1 auto;
+    height: 16px;
+    display: flex;
+    align-items: center;
+}
+/* Played-portion overlay: pure visual, sits behind the slider. */
+.seekbar__played {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 4px;
+    background: var(--color-accent);
+    border-radius: 999px;
+    pointer-events: none;
+    transition: width 0.1s linear;
+}
+/* The actual interactive slider, styled to look like a thin track. */
+.seekbar__slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    background: transparent;
+    cursor: pointer;
+    margin: 0;
+    padding: 0;
+    height: 16px;
+    position: relative;
+    z-index: 1;
+}
+.seekbar__slider::-webkit-slider-runnable-track {
     height: 4px;
     background: var(--color-divider);
     border-radius: 999px;
-    overflow: hidden;
-    cursor: pointer;
 }
-
-.seekbar__played {
-    background: var(--color-accent);
-    height: 100%;
-    transition: width 0.1s linear;
+.seekbar__slider::-moz-range-track {
+    height: 4px;
+    background: var(--color-divider);
+    border-radius: 999px;
 }
+.seekbar__slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--color-fg);
+    border: 0;
+    margin-top: -4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.seekbar__slider:hover::-webkit-slider-thumb,
+.seekbar__slider:focus::-webkit-slider-thumb { opacity: 1; }
+.seekbar__slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--color-fg);
+    border: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.seekbar__slider:hover::-moz-range-thumb,
+.seekbar__slider:focus::-moz-range-thumb { opacity: 1; }
+.seekbar__slider:focus { outline: none; }
 
 /* ── Volume ──────────────────────────────────────────────────────────── */
 
@@ -328,7 +386,10 @@ input:focus, select:focus, textarea:focus {
     background: var(--color-bg-alt);
 }
 
-@media (max-width: 720px) {
+/* Mobile-style breakpoint. Set narrower so the sidebar stays visible
+   on small dev windows; only true mobile / split-screen layouts trigger
+   the bottom-nav swap. */
+@media (max-width: 480px) {
     .sidebar { display: none; }
     .bottom-nav { display: flex; }
     .now-playing-bar { display: none; }
@@ -418,6 +479,9 @@ input:focus, select:focus, textarea:focus {
 .tracks-table__grid {
     width: 100%;
     border-collapse: collapse;
+    /* Honor explicit column widths instead of auto-sizing them based
+       on content (which would make the title column squish the time). */
+    table-layout: fixed;
 }
 
 .tracks-table__grid th {
@@ -581,3 +645,345 @@ input:focus, select:focus, textarea:focus {
 .select--small { width: auto; }
 .range { width: 100%; }
 .color-picker { width: 60px; height: 32px; padding: 0; border: 1px solid var(--color-divider); border-radius: var(--radius-sm); }
+
+/* ----------------------------------------------------------------------
+ * Add-source wizard
+ * ---------------------------------------------------------------------- */
+
+.wizard-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 10, 12, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: grid;
+    place-items: center;
+    z-index: 1000;
+    padding: var(--space-4);
+}
+
+.wizard {
+    width: min(640px, 100%);
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
+    background: var(--color-bg);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.wizard__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0;
+}
+.wizard__header h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+}
+.wizard__close {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--color-bg-alt);
+    color: var(--color-fg-mute);
+    font-size: 22px;
+    line-height: 1;
+}
+.wizard__close:hover { color: var(--color-fg); }
+
+.wizard__steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    gap: var(--space-2);
+    border-bottom: 1px solid var(--color-divider);
+    padding-bottom: var(--space-3);
+}
+.wizard__step {
+    flex: 1 1 0;
+    color: var(--color-fg-mute);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+.wizard__step--active { color: var(--color-fg); font-weight: 500; }
+.wizard__step--done   { color: var(--color-success); }
+.wizard__step-num {
+    display: inline-grid;
+    place-items: center;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--color-bg-alt);
+    border: 1px solid var(--color-divider);
+    font-size: 11px;
+}
+.wizard__step--active .wizard__step-num {
+    background: var(--color-accent);
+    color: white;
+    border-color: var(--color-accent);
+}
+.wizard__step--done .wizard__step-num {
+    background: var(--color-success);
+    color: white;
+    border-color: var(--color-success);
+}
+
+.wizard__intro {
+    color: var(--color-fg-mute);
+    font-size: 14px;
+}
+
+.wizard__kinds {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-3);
+}
+.kind-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    background: var(--color-bg-alt);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+    text-align: left;
+    transition: border-color 0.15s, transform 0.05s;
+}
+.kind-card:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    transform: translateY(-1px);
+}
+.kind-card__icon { font-size: 22px; }
+.kind-card__sub  { color: var(--color-fg-mute); font-size: 12px; }
+.kind-card--disabled { opacity: 0.45; cursor: not-allowed; }
+
+.wizard__configure { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.field__path-row {
+    display: flex;
+    gap: var(--space-2);
+    align-items: stretch;
+}
+.field__path-input { flex: 1 1 auto; min-width: 0; }
+.field__hint {
+    display: block;
+    color: var(--color-fg-mute);
+    font-size: 12px;
+    margin-top: var(--space-1);
+}
+
+.wizard__error {
+    background: rgba(231, 85, 85, 0.10);
+    color: var(--color-danger);
+    border: 1px solid rgba(231, 85, 85, 0.35);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    font-size: 13px;
+    white-space: pre-wrap;
+    margin: 0;
+}
+
+.wizard__footer {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-divider);
+}
+.wizard__footer .btn { min-width: 110px; }
+
+.wizard__scanning { display: flex; flex-direction: column; gap: var(--space-4); }
+.wizard__scanning h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+.wizard__success { color: var(--color-success); }
+
+.wizard__stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--space-3);
+}
+.wizard__stat {
+    background: var(--color-bg-alt);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.wizard__stat-num {
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.wizard__stat-label {
+    font-size: 11px;
+    color: var(--color-fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.wizard__stat--warn .wizard__stat-num { color: var(--color-danger); }
+
+.wizard__current {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-fg-mute);
+    background: var(--color-bg-alt);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    word-break: break-all;
+    margin: 0;
+}
+.wizard__current-label { color: var(--color-fg-mute); }
+.wizard__current-path  { color: var(--color-fg); }
+
+.wizard__progress {
+    height: 4px;
+    background: var(--color-divider);
+    border-radius: 999px;
+    overflow: hidden;
+    position: relative;
+}
+.wizard__progress-bar {
+    position: absolute;
+    inset: 0;
+    background: var(--color-accent);
+}
+.wizard__progress-bar--indeterminate {
+    width: 30%;
+    animation: wizard-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes wizard-indeterminate {
+    0%   { transform: translateX(-100%); }
+    50%  { transform: translateX(150%); }
+    100% { transform: translateX(350%); }
+}
+
+.wizard__hint { color: var(--color-fg-mute); font-size: 13px; margin: 0; }
+
+.wizard__stage {
+    color: var(--color-accent);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    background: rgba(29, 185, 84, 0.08);
+    border: 1px solid rgba(29, 185, 84, 0.25);
+    border-radius: var(--radius-sm);
+}
+
+.wizard__debug {
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-alt);
+    padding: var(--space-2) var(--space-3);
+}
+.wizard__debug summary {
+    cursor: pointer;
+    color: var(--color-fg-mute);
+    font-size: 12px;
+    user-select: none;
+}
+.wizard__debug summary:hover { color: var(--color-fg); }
+.wizard__debug-log {
+    margin: var(--space-2) 0 0 0;
+    padding: var(--space-2);
+    background: var(--color-bg);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre;
+    color: var(--color-fg-mute);
+}
+
+/* ----------------------------------------------------------------------
+ * Track row play affordance + idle now-playing bar
+ * ---------------------------------------------------------------------- */
+
+.tracks-table__num {
+    width: 40px;
+    text-align: right;
+    color: var(--color-fg-mute);
+    position: relative;
+    user-select: none;
+}
+.tracks-table__num-text { display: inline; }
+.tracks-table__play {
+    display: none;
+    color: var(--color-accent);
+    font-size: 14px;
+    line-height: 1;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+}
+.tracks-table__row:hover .tracks-table__num-text { display: none; }
+.tracks-table__row:hover .tracks-table__play     { display: inline-flex; }
+.tracks-table__row:hover .tracks-table__play:hover { background: var(--color-bg-alt); }
+
+.tracks-table__row { cursor: default; }
+.tracks-table__row:hover {
+    background: var(--color-bg-alt);
+}
+
+.tracks-table__title,
+.tracks-table__col--title {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    /* Title takes the leftover space after fixed-width columns. */
+}
+.tracks-table__time,
+.tracks-table__col--duration {
+    color: var(--color-fg-mute);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    /* Override the per-cell padding (8px from .tracks-table__grid td)
+       so width: 80px is the *full* usable cell width. With padding the
+       content area would be 64px and text-align: center would leave
+       visible asymmetric whitespace. */
+    width: 80px;
+    min-width: 80px;
+    padding-left: 0;
+    padding-right: 0;
+}
+.tracks-table__col--num   { width: 50px; padding-left: var(--space-3); }
+.tracks-table__col--year  { width: 70px; text-align: right; }
+.tracks-table__col--genre { width: 140px; }
+
+/* Idle (nothing playing) state */
+.now-playing-bar--idle {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-fg-mute);
+    font-size: 13px;
+    text-align: center;
+    border-top: 1px solid var(--color-divider);
+    background: var(--color-bg-alt);
+    height: var(--bar-height);
+    padding: 0 var(--space-4);
+}
+.now-playing-bar__idle-text { max-width: 600px; }
+.now-playing-bar__error { color: var(--color-danger); font-family: var(--font-mono); }
