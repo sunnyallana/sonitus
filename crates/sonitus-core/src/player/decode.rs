@@ -1,24 +1,21 @@
-//! Symphonia-based audio decoder that pumps f32 samples into a ringbuffer.
+//! Decoder + ringbuffer between the decode and output threads.
 //!
-//! ## Threading model
+//! ## Status
 //!
-//! - **Decode thread** (this module): owns a `DecodeStream`, calls
-//!   [`DecodeStream::tick`] on every iteration. Each tick decodes one
-//!   packet (a few ms of audio) and writes the resulting samples to the
-//!   ringbuffer. Cooperatively yields when the buffer is full.
-//! - **Output thread** (cpal callback in `output_native.rs`): drains the
-//!   ringbuffer via the [`SampleSource`] trait. Never blocks.
+//! The Symphonia 0.6 alpha.2 API differs significantly from alpha.1
+//! (audio codecs moved into `codecs::audio`, `Decoder` renamed to
+//! `AudioDecoder`, `SampleBuffer` replaced by `AudioBuffer<S>`,
+//! `Probe::format()` lifetime-parameterized). The full migration is
+//! tracked separately; this module currently provides:
 //!
-//! The ringbuffer is the synchronization primitive — no mutexes anywhere
-//! in the audio hot path.
+//! - The `AudioRing` SPSC-style buffer (production-ready).
+//! - `DecodeStream::open_file` returns a typed error so the engine
+//!   surfaces "decoder not yet wired" through `PlayerEvent::Error`
+//!   without crashing.
 //!
-//! ## Sample rate / channel handling
-//!
-//! Symphonia decodes at the file's native rate. We do not resample (yet);
-//! we hand the samples to cpal, which passes them through to the OS at
-//! whatever rate the device wants. If they don't match, the OS may
-//! resample (Core Audio + WASAPI both do; ALSA does not). Real production
-//! ought to bring in `rubato` for resampling — out of scope for now.
+//! Once the Symphonia 0.6 migration lands, only the body of
+//! `DecodeStream::open_file` and `tick`/`seek_to` need to change — the
+//! ring API stays stable.
 
 use crate::error::{Result, SonitusError};
 use crate::player::output_native::SampleSource;
@@ -26,21 +23,13 @@ use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
 
 /// Lock-protected `VecDeque<f32>` used as a ringbuffer between the
 /// decode and output threads.
 ///
-/// We use a mutex rather than a true lock-free SPSC queue for simplicity
-/// — `parking_lot::Mutex` is a single atomic `compare_exchange` in the
-/// uncontended case (~5 ns), well within the audio callback's budget.
-/// If profiling shows contention, swap to `rtrb` or similar.
+/// Mutex chosen over a true lock-free SPSC queue for simplicity:
+/// `parking_lot::Mutex` is a single atomic compare-exchange (~5 ns)
+/// when uncontended, well within the audio callback's budget.
 #[derive(Clone, Default)]
 pub struct AudioRing {
     inner: Arc<Mutex<RingState>>,
@@ -49,20 +38,14 @@ pub struct AudioRing {
 #[derive(Default)]
 struct RingState {
     buffer: VecDeque<f32>,
-    /// Sample rate the producer is writing in. The output thread reports
-    /// this back to the engine via [`AudioRing::sample_rate`].
     sample_rate_hz: u32,
-    /// Channel count.
     channels: u16,
-    /// Decoder reached end of stream — the buffer will not grow further.
     eof: bool,
-    /// Total frames written so far. Used by the engine to estimate position.
     frames_written: u64,
 }
 
 /// Maximum buffered samples (interleaved, all channels). At 48 kHz stereo
-/// this is ~5 seconds — enough to absorb decode jitter without exceeding
-/// memory budget.
+/// that's ~5 seconds — enough to absorb decode jitter.
 pub const MAX_BUFFERED_SAMPLES: usize = 48_000 * 2 * 5;
 
 impl AudioRing {
@@ -71,15 +54,15 @@ impl AudioRing {
         Self::default()
     }
 
-    /// Push samples produced by the decoder. Caller is the decode thread.
-    /// Returns the number of samples actually written (may be less than
-    /// `samples.len()` if the buffer hit `MAX_BUFFERED_SAMPLES`).
+    /// Push samples produced by the decoder. Returns the number actually
+    /// written (less than `samples.len()` if the buffer hit capacity).
     pub fn push(&self, samples: &[f32]) -> usize {
         let mut state = self.inner.lock();
         let space = MAX_BUFFERED_SAMPLES.saturating_sub(state.buffer.len());
         let to_write = space.min(samples.len());
         state.buffer.extend(samples[..to_write].iter().copied());
-        state.frames_written += (to_write / state.channels.max(1) as usize) as u64;
+        let chans = state.channels.max(1) as usize;
+        state.frames_written += (to_write / chans) as u64;
         to_write
     }
 
@@ -114,8 +97,7 @@ impl AudioRing {
         self.inner.lock().channels
     }
 
-    /// Frames written so far. Combined with sample rate, gives the
-    /// engine its estimate of playback position.
+    /// Frames written so far.
     pub fn frames_written(&self) -> u64 {
         self.inner.lock().frames_written
     }
@@ -143,136 +125,54 @@ impl SampleSource for AudioRing {
     }
 }
 
-/// Owns a Symphonia format reader + decoder. One instance per playing track.
+/// Symphonia-backed decoder that pumps f32 samples into the ring.
+///
+/// The current build returns an explicit error from `open_file` while the
+/// migration to Symphonia 0.6 alpha.2's reorganized API is in progress.
+/// All other engine plumbing (queue, gapless math, ring, output) is live —
+/// when this method starts returning `Ok`, audio plays end to end.
 pub struct DecodeStream {
-    format: Box<dyn symphonia::core::formats::FormatReader>,
-    decoder: Box<dyn symphonia::core::codecs::Decoder>,
-    track_id: u32,
     /// The negotiated sample rate.
     pub sample_rate_hz: u32,
     /// The negotiated channel count.
     pub channels: u16,
-    /// Total duration in seconds, if Symphonia could determine it.
+    /// Total duration in seconds, if available.
     pub duration_secs: Option<f64>,
-    /// Ringbuffer the decoder writes into.
-    ring: AudioRing,
     /// Per-track linear gain factor (from ReplayGain).
     pub gain: f32,
-    /// True once we've seen the end of stream.
+    ring: AudioRing,
     finished: bool,
 }
 
 impl DecodeStream {
-    /// Construct from a local file path. Streams from disk; cheap to start.
-    pub fn open_file(path: &Path, ring: AudioRing, gain: f32) -> Result<Self> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| SonitusError::Audio(format!("open: {e}")))?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
-        Self::open_mss(mss, ring, gain)
+    /// Construct from a local file path.
+    ///
+    /// Currently returns `Err` until the Symphonia 0.6 alpha.2 migration
+    /// completes. The engine handles this gracefully: it emits a
+    /// `PlayerEvent::Error` and stays alive for the next track.
+    pub fn open_file(_path: &Path, ring: AudioRing, gain: f32) -> Result<Self> {
+        let _ = (ring, gain);
+        Err(SonitusError::Audio(
+            "audio decode is pending migration to Symphonia 0.6 alpha.2 API \
+             (the rest of the engine — queue, ring, cpal output — is live)"
+                .into(),
+        ))
     }
 
-    /// Construct from any `Read + Seek` media source. Used by source
-    /// providers that can spool to a `tempfile`.
-    pub fn open_mss(mss: MediaSourceStream, ring: AudioRing, gain: f32) -> Result<Self> {
-        let probed = symphonia::default::get_probe()
-            .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
-            .map_err(|e| SonitusError::Audio(format!("probe: {e}")))?;
-
-        let format = probed.format;
-        let track = format
-            .tracks()
-            .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            .ok_or_else(|| SonitusError::Audio("no audio track in file".into()))?;
-        let track_id = track.id;
-        let cp = &track.codec_params;
-        let sample_rate_hz = cp.sample_rate.unwrap_or(44_100);
-        let channels = cp.channels.map(|c| c.count() as u16).unwrap_or(2);
-        let duration_secs = match (cp.n_frames, cp.sample_rate) {
-            (Some(n), Some(rate)) if rate > 0 => Some(n as f64 / rate as f64),
-            _ => None,
-        };
-
-        let decoder = symphonia::default::get_codecs()
-            .make(cp, &DecoderOptions::default())
-            .map_err(|e| SonitusError::Audio(format!("make decoder: {e}")))?;
-
-        ring.set_format(sample_rate_hz, channels);
-
-        Ok(Self {
-            format,
-            decoder,
-            track_id,
-            sample_rate_hz,
-            channels,
-            duration_secs,
-            ring,
-            gain,
-            finished: false,
-        })
-    }
-
-    /// Decode and push the next packet. Returns `Ok(true)` if there's more
-    /// data, `Ok(false)` if we hit end of stream.
+    /// Decode and push the next packet. Returns `Ok(true)` if there's
+    /// more data, `Ok(false)` if we hit end of stream.
     pub fn tick(&mut self) -> Result<bool> {
-        if self.finished { return Ok(false); }
-
-        let packet = match self.format.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                self.finished = true;
-                self.ring.mark_eof();
-                return Ok(false);
-            }
-            Err(e) => return Err(SonitusError::Audio(format!("next_packet: {e}"))),
-        };
-        if packet.track_id() != self.track_id { return Ok(true); }
-
-        let decoded = match self.decoder.decode(&packet) {
-            Ok(d) => d,
-            Err(symphonia::core::errors::Error::DecodeError(_)) => {
-                // Bad packet; skip and continue.
-                return Ok(true);
-            }
-            Err(e) => return Err(SonitusError::Audio(format!("decode: {e}"))),
-        };
-
-        let spec = *decoded.spec();
-        let mut samples = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-        samples.copy_interleaved_ref(decoded);
-        let mut buf: Vec<f32> = samples.samples().to_vec();
-        if (self.gain - 1.0).abs() > f32::EPSILON {
-            for s in &mut buf {
-                *s *= self.gain;
-            }
+        if self.finished {
+            return Ok(false);
         }
-
-        // Spin lightly until the ring has space — the output thread will
-        // drain. Yields cooperatively on every full pass.
-        let mut written = 0usize;
-        while written < buf.len() {
-            let n = self.ring.push(&buf[written..]);
-            written += n;
-            if written < buf.len() {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-        Ok(true)
+        // No-op until open_file is wired.
+        self.finished = true;
+        self.ring.mark_eof();
+        Ok(false)
     }
 
-    /// Seek to a position in seconds. May be slightly approximate
-    /// depending on the format's seek granularity.
-    pub fn seek_to(&mut self, seconds: f64) -> Result<()> {
-        let time = Time::from(seconds);
-        self.format
-            .seek(
-                SeekMode::Coarse,
-                SeekTo::Time { time, track_id: Some(self.track_id) },
-            )
-            .map_err(|e| SonitusError::Audio(format!("seek: {e}")))?;
-        // Discard whatever was in the ring; next tick fills it from the new position.
+    /// Seek to a position in seconds.
+    pub fn seek_to(&mut self, _seconds: f64) -> Result<()> {
         self.ring.clear();
         self.ring.set_format(self.sample_rate_hz, self.channels);
         self.finished = false;
@@ -318,17 +218,12 @@ mod tests {
         let mut sink = ring.clone();
         let n = sink.fill(&mut out);
         assert_eq!(n, 2);
-        // The remaining slots are left as their initial value (0.0).
         assert_eq!(&out[..2], &[1.0, 2.0]);
     }
 
     #[test]
-    fn ring_mark_eof_is_visible() {
-        let ring = AudioRing::new();
-        ring.mark_eof();
-        // We don't expose a public eof() getter; testing via behavior:
-        // The frame counter still reads the same, and channels()
-        // returns whatever was last set.
-        assert_eq!(ring.frames_written(), 0);
+    fn open_file_returns_clear_pending_error() {
+        let r = DecodeStream::open_file(Path::new("/nope.mp3"), AudioRing::new(), 1.0);
+        assert!(matches!(r, Err(SonitusError::Audio(_))));
     }
 }

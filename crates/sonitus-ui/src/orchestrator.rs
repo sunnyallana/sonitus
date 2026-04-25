@@ -364,8 +364,11 @@ pub fn start_event_pump(
     mut player_state: Signal<PlayerState>,
     mut downloads_state: Signal<Vec<DownloadItem>>,
     mut library_state: Signal<LibraryState>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+) {
+    // Dioxus 0.7 Signals use UnsyncStorage (RefCell-backed) and are not Send.
+    // `dioxus::prelude::spawn` runs the task on Dioxus's local executor where
+    // Send isn't required, so we can capture Signals across .await points.
+    dioxus::prelude::spawn(async move {
         // Refresh the library state once on startup.
         if let Ok(summary) = handle.library.summary().await {
             let mut s = library_state.write();
@@ -395,7 +398,7 @@ pub fn start_event_pump(
                 }
             }
         }
-    })
+    });
 }
 
 fn apply_download_update(state: &mut Signal<Vec<DownloadItem>>, update: DownloadUpdate) {

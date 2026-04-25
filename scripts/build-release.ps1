@@ -17,7 +17,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $RepoRoot
 
 Write-Host "==> Building Sonitus release for Windows..." -ForegroundColor Cyan
-& dx bundle --platform desktop --release
+& dx bundle --package sonitus-ui --platform desktop --release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $dist = Join-Path $RepoRoot 'dist'

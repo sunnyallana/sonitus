@@ -87,7 +87,7 @@ fn TrackLine(track: Track) -> Element {
     };
     let dur = format_duration(track.duration_ms.unwrap_or(0).max(0) as u64);
     rsx! {
-        li { class: "album-detail__track", ondblclick: onclick,
+        li { class: "album-detail__track", ondoubleclick: onclick,
             span { class: "album-detail__track-num",
                 "{track.track_number.unwrap_or(0)}"
             }

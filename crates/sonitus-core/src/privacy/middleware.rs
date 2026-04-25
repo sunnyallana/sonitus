@@ -17,7 +17,9 @@
 use super::audit::{AuditEntry, AuditLogger, TriggerSource, redact_query};
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::{Request, Response};
+// Use the reqwest types re-exported by reqwest_middleware to avoid version
+// skew between the workspace reqwest and the one bundled with the middleware.
+use reqwest_middleware::reqwest::{Request, Response};
 use reqwest_middleware::{Middleware, Next, Result as MwResult};
 use std::sync::Arc;
 use std::time::Instant;

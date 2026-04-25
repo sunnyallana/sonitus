@@ -8,8 +8,6 @@
 // from yelling about every component name.
 #![allow(non_snake_case)]
 
-use dioxus::prelude::*;
-
 mod app;
 mod components;
 mod hooks;

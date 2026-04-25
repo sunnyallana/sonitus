@@ -24,17 +24,21 @@ pub fn SearchResults(q: String) -> Element {
             header { class: "search-results__header",
                 h1 { "Search: \"{q}\"" }
             }
+            // Resource<Option<Vec<...>>> — outer Option = "loading?",
+            // inner Option = "search succeeded? (None if no app handle yet)".
             match &*results.read_unchecked() {
-                None => rsx! { p { class: "search-results__loading", "Searching…" } },
-                Some(items) if items.is_empty() && !q.is_empty() => rsx! {
+                None | Some(None) => rsx! {
+                    p { class: "search-results__loading", "Searching..." }
+                },
+                Some(Some(items)) if items.is_empty() && !q.is_empty() => rsx! {
                     p { class: "search-results__empty", "No results." }
                 },
-                Some(items) if items.is_empty() => rsx! {
+                Some(Some(items)) if items.is_empty() => rsx! {
                     p { class: "search-results__empty", "Type something to search." }
                 },
-                Some(items) => rsx! {
-                    ResultGroup { items: items.clone(), kind: SearchKind::Track, label: "Tracks".to_string() }
-                    ResultGroup { items: items.clone(), kind: SearchKind::Album, label: "Albums".to_string() }
+                Some(Some(items)) => rsx! {
+                    ResultGroup { items: items.clone(), kind: SearchKind::Track,  label: "Tracks".to_string() }
+                    ResultGroup { items: items.clone(), kind: SearchKind::Album,  label: "Albums".to_string() }
                     ResultGroup { items: items.clone(), kind: SearchKind::Artist, label: "Artists".to_string() }
                 },
             }

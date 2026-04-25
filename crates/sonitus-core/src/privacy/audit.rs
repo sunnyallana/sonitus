@@ -34,7 +34,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// One audit log record. Serialized as a single JSON object per line.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuditEntry {
     /// ISO 8601 UTC timestamp.
     pub ts: DateTime<Utc>,

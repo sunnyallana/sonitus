@@ -39,8 +39,8 @@ pub fn TracksTable() -> Element {
                                 TrackRow { idx: i, track: t.clone() }
                             }
                         },
-                        Some(None) => rsx! { EmptyRow { msg: "No tracks yet — add a source.".into() } },
-                        None => rsx! { EmptyRow { msg: "Loading…".into() } },
+                        Some(None) => rsx! { EmptyRow { msg: String::from("No tracks yet — add a source.") } },
+                        None => rsx! { EmptyRow { msg: String::from("Loading...") } },
                     }
                 }
             }
@@ -62,7 +62,7 @@ fn TrackRow(idx: usize, track: Track) -> Element {
     let genre = track.genre.clone().unwrap_or_default();
 
     rsx! {
-        tr { class: "tracks-table__row", ondblclick: onclick_play,
+        tr { class: "tracks-table__row", ondoubleclick: onclick_play,
             td { "{idx + 1}" }
             td { "{track.title}" }
             td { "{genre}" }

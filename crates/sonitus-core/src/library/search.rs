@@ -32,7 +32,7 @@ pub enum SearchKind {
 }
 
 /// One item in the search result list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResult {
     /// What kind of result this is.
     pub kind: SearchKind,

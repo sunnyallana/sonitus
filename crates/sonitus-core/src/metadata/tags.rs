@@ -100,6 +100,9 @@ pub fn parse(path: &str, bytes: &[u8]) -> Result<ParsedTags> {
 
 /// Parse ID3 tags (MP3, WAV with ID3 chunk).
 pub fn parse_id3(bytes: &[u8]) -> Result<ParsedTags> {
+    // id3 1.16 moved the convenience getters (`title`, `artist`, etc.) into the
+    // `TagLike` trait — bring it into scope so they resolve on `Tag`.
+    use id3::TagLike;
     let cursor = std::io::Cursor::new(bytes);
     let tag = id3::Tag::read_from2(cursor)
         .map_err(|e| SonitusError::Audio(format!("id3 parse: {e}")))?;
@@ -135,8 +138,10 @@ pub fn parse_id3(bytes: &[u8]) -> Result<ParsedTags> {
 
 /// Parse FLAC Vorbis comments via `metaflac`.
 pub fn parse_flac(bytes: &[u8]) -> Result<ParsedTags> {
-    let cursor = std::io::Cursor::new(bytes);
-    let tag = metaflac::Tag::read_from(cursor)
+    // metaflac 0.2's read_from takes `&mut dyn Read`. Bind the cursor mutably
+    // and pass `&mut`.
+    let mut cursor = std::io::Cursor::new(bytes);
+    let tag = metaflac::Tag::read_from(&mut cursor)
         .map_err(|e| SonitusError::Audio(format!("flac parse: {e}")))?;
     let mut out = ParsedTags::default();
 

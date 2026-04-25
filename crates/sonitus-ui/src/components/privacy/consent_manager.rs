@@ -38,7 +38,11 @@ fn FeatureToggle(feature: Feature) -> Element {
         if let Some(handle) = h.clone() {
             let new_state = !handle.consent.is_enabled(feature);
             let _ = handle.consent.set(feature, new_state);
-            tick.set(tick.peek().wrapping_add(1));
+            // Read the current tick value into a local before writing to
+            // avoid the simultaneous immutable+mutable borrow that arises
+            // from `tick.set(tick.peek()...)` on a Signal.
+            let next = tick.peek().wrapping_add(1);
+            tick.set(next);
         }
     };
 

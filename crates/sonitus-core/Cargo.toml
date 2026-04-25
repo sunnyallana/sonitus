@@ -9,10 +9,18 @@ repository    = { workspace = true }
 description   = "Core library for Sonitus — DB, crypto, audio, sources, privacy."
 
 [features]
-default = ["all-sources"]
+# SMB is opt-in: pavao-sys vendor-builds Samba which (a) takes ~10 minutes
+# and (b) can't clone its vendored Samba checkout on Windows due to
+# MAX_PATH (260 char) limits. Users on Linux/macOS can opt in with
+# --features smb; Windows users can enable long-path support and try.
+default = ["s3"]
 all-sources = ["s3", "smb"]
 s3  = ["dep:aws-sdk-s3", "dep:aws-config"]
 smb = ["dep:pavao"]
+# Expose VaultDb::open_in_memory etc. to integration tests (the `cfg(test)`
+# gate applies only to unit tests inside the lib; integration tests need
+# the feature flag).
+test-utils = []
 
 [dependencies]
 sonitus-meta        = { workspace = true }
@@ -29,6 +37,7 @@ futures             = { workspace = true }
 # HTTP
 reqwest             = { workspace = true }
 reqwest-middleware  = { workspace = true }
+http                = { workspace = true }
 
 # DB
 sqlx                = { workspace = true }
