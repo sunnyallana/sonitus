@@ -78,9 +78,13 @@ pub fn App() -> Element {
 
     let status = boot_status.read().clone();
 
+    // The font preload Link is intentionally omitted: Dioxus 0.7's
+    // document::Link doesn't expose the `as` attribute (Rust keyword); we'll
+    // bring back an explicit raw-HTML preload in a follow-up.
+    let _ = FONT_INTER;
+
     rsx! {
         document::Stylesheet { href: STYLE_CSS }
-        document::Link { rel: "preload", as_: "font", href: FONT_INTER, crossorigin: "anonymous" }
         document::Title { "Sonitus" }
         document::Meta { name: "color-scheme", content: "dark light" }
 

@@ -83,11 +83,12 @@ pub enum PlayerCommand {
 }
 
 /// Repeat mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Display, EnumString, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum RepeatMode {
     /// Stop after the queue is exhausted.
+    #[default]
     Off,
     /// Repeat the current track indefinitely.
     One,

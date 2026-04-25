@@ -49,7 +49,10 @@ pub struct GoogleDriveSource {
     client_secret: Secret<String>,
 }
 
-#[derive(Debug, Clone)]
+// Secret<String> intentionally does not implement Clone — we never want to
+// duplicate live token bytes in memory. TokenPair lives behind RwLock so
+// callers always go through .read() / .write() and never need to clone.
+#[derive(Debug)]
 struct TokenPair {
     access: Secret<String>,
     refresh: Option<Secret<String>>,

@@ -11,7 +11,7 @@ use strum::{Display, EnumString};
 
 /// One row from `tracks`. Joins (artist name, album title) are not
 /// embedded here — query modules return enriched view structs when needed.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, FromRow, Serialize, Deserialize)]
 pub struct Track {
     /// UUID v4. Stable across rescans (computed from source_id+remote_path).
     pub id: String,
@@ -101,7 +101,7 @@ impl Track {
 }
 
 /// One row from `artists`.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, FromRow, Serialize, Deserialize)]
 pub struct Artist {
     /// UUID derived from sort_name.
     pub id: String,
@@ -156,7 +156,7 @@ impl Artist {
 }
 
 /// One row from `albums`.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, FromRow, Serialize, Deserialize)]
 pub struct Album {
     /// UUID derived from artist + title.
     pub id: String,
@@ -207,7 +207,7 @@ impl Album {
 }
 
 /// One row from `playlists`.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, FromRow, Serialize, Deserialize)]
 pub struct Playlist {
     /// UUID v4.
     pub id: String,
@@ -239,7 +239,7 @@ impl Playlist {
 }
 
 /// One row from `sources`.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, FromRow, Serialize, Deserialize)]
 pub struct Source {
     /// User-assigned ID (e.g. `"src_001"`).
     pub id: String,

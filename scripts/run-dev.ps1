@@ -11,7 +11,7 @@
     Build with --release. Slower compile, much faster runtime audio path.
 
 .PARAMETER Platform
-    Override the dx target. Default: desktop. Other options: web | ios | android.
+    Override the dx target. Default: desktop. Other options: web, ios, android.
 
 .PARAMETER SkipChecks
     Skip the prerequisite checks (use if you've already verified everything).
@@ -65,7 +65,7 @@ Write-Host "Sonitus dev launcher" -ForegroundColor Magenta
 Write-Host "Repo root: $RepoRoot"
 
 if (-not $SkipChecks) {
-    # ── 1. rustup ──────────────────────────────────────────────────────
+    # --- 1. rustup -----------------------------------------------------
     Write-Step "Checking rustup"
     if (-not (Test-Command 'rustup')) {
         Write-Warn "rustup not found on PATH."
@@ -75,7 +75,7 @@ if (-not $SkipChecks) {
     }
     Write-Ok (rustup --version)
 
-    # ── 2. Pinned toolchain ────────────────────────────────────────────
+    # --- 2. Pinned toolchain -------------------------------------------
     Write-Step "Checking pinned Rust toolchain"
     $toolchainFile = Join-Path $RepoRoot 'rust-toolchain.toml'
     if (Test-Path $toolchainFile) {
@@ -101,7 +101,7 @@ if (-not $SkipChecks) {
         Write-Warn "No rust-toolchain.toml found; using rustup default."
     }
 
-    # ── 3. Required Windows targets for desktop ────────────────────────
+    # --- 3. Required Windows target for desktop ------------------------
     Write-Step "Checking target: x86_64-pc-windows-msvc"
     $targets = & rustup target list --installed 2>$null
     if (-not ($targets -match 'x86_64-pc-windows-msvc')) {
@@ -110,7 +110,7 @@ if (-not $SkipChecks) {
     }
     Write-Ok "Target installed."
 
-    # ── 4. MSVC build tools (linker) ───────────────────────────────────
+    # --- 4. MSVC build tools (linker) ----------------------------------
     Write-Step "Checking MSVC build tools"
     if (-not (Test-Command 'link')) {
         Write-Warn "MSVC linker (link.exe) not detected on PATH."
@@ -118,12 +118,12 @@ if (-not $SkipChecks) {
         Write-Host "    https://visualstudio.microsoft.com/downloads/"
         Write-Host "    (winget install Microsoft.VisualStudio.2022.BuildTools)"
         Write-Host ""
-        Write-Host "    Continuing anyway — cargo may locate it via the registry on its own."
+        Write-Host "    Continuing anyway -- cargo may locate it via the registry on its own."
     } else {
         Write-Ok "link.exe found."
     }
 
-    # ── 5. Dioxus CLI ──────────────────────────────────────────────────
+    # --- 5. Dioxus CLI -------------------------------------------------
     Write-Step "Checking dioxus-cli (dx)"
     if (-not (Test-Command 'dx')) {
         Write-Host "    Installing dioxus-cli..."
@@ -135,10 +135,10 @@ if (-not $SkipChecks) {
     }
     Write-Ok (dx --version 2>&1 | Select-Object -First 1)
 
-    # ── 6. WebView2 runtime (desktop only) ─────────────────────────────
+    # --- 6. WebView2 runtime (desktop only) ----------------------------
     if ($Platform -eq 'desktop') {
         Write-Step "Checking WebView2 runtime"
-        $wvKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+        $wvKey  = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
         $altKey = 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
         $present = (Test-Path $wvKey) -or (Test-Path $altKey)
         if ($present) {
@@ -150,8 +150,10 @@ if (-not $SkipChecks) {
     }
 }
 
-# ── 7. Launch ──────────────────────────────────────────────────────────
-$dxArgs = @('serve', '--platform', $Platform)
+# --- 7. Launch ---------------------------------------------------------
+# `--package sonitus-ui` is required because we're a workspace with
+# multiple crates; dx can't infer the binary target from the root manifest.
+$dxArgs = @('serve', '--package', 'sonitus-ui', '--platform', $Platform)
 if ($Release) {
     $dxArgs += '--release'
 }

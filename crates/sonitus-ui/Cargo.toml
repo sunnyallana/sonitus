@@ -13,10 +13,14 @@ name = "sonitus"
 path = "src/main.rs"
 
 [features]
-default = ["desktop"]
+default = ["desktop", "s3"]
 desktop = ["dep:dioxus-desktop"]
 web     = ["dep:dioxus-web"]
 mobile  = ["dep:dioxus-mobile"]
+# Forward source-provider features to sonitus-core so orchestrator
+# `#[cfg(feature = "s3")]` etc. resolve in this crate too.
+s3      = ["sonitus-core/s3"]
+smb     = ["sonitus-core/smb"]
 
 [dependencies]
 sonitus-core        = { workspace = true }
