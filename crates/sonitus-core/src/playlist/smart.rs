@@ -57,17 +57,29 @@ pub struct SmartCondition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SmartField {
+    /// Genre tag.
     Genre,
+    /// Release year.
     Year,
+    /// Beats per minute.
     Bpm,
+    /// User-set rating (0-5).
     Rating,
+    /// "Loved" flag.
     Loved,
+    /// Times played by the user.
     PlayCount,
+    /// Unix timestamp of last play.
     LastPlayedAt,
+    /// Unix timestamp of insertion into the library.
     CreatedAt,
+    /// Track duration in milliseconds.
     DurationMs,
+    /// Joined artist name (artists.name).
     ArtistName,
+    /// Joined album title (albums.title).
     AlbumTitle,
+    /// Container/codec format.
     Format,
 }
 
@@ -95,7 +107,22 @@ impl SmartField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SmartOp {
-    Eq, Ne, Lt, Lte, Gt, Gte, Contains, StartsWith,
+    /// Equal.
+    Eq,
+    /// Not equal.
+    Ne,
+    /// Less than.
+    Lt,
+    /// Less than or equal.
+    Lte,
+    /// Greater than.
+    Gt,
+    /// Greater than or equal.
+    Gte,
+    /// Substring match (translates to SQL `LIKE %value%`).
+    Contains,
+    /// Prefix match (translates to SQL `LIKE value%`).
+    StartsWith,
 }
 
 impl SmartOp {

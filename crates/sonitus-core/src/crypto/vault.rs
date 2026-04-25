@@ -128,7 +128,7 @@ impl Drop for VaultDb {
     /// shared case, the inner `VaultKey`'s own `ZeroizeOnDrop` impl runs
     /// when the last `Arc` is released.
     fn drop(&mut self) {
-        if let Some(mut last) = Arc::get_mut(&mut self.key) {
+        if let Some(last) = Arc::get_mut(&mut self.key) {
             // We hold the only reference; manually zero now for predictable
             // wipe ordering relative to pool teardown.
             last.0.zeroize();

@@ -1,8 +1,6 @@
 //! Cover art helpers — extract from tags, dedupe by hash, optional fetch
 //! from external URL (consent-gated through MusicBrainz/CAA).
 
-use crate::error::Result;
-
 /// One piece of cover art with metadata.
 #[derive(Debug, Clone)]
 pub struct CoverArt {

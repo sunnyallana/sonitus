@@ -1,11 +1,14 @@
 -- ─────────────────────────────────────────────────────────────────────────
 -- 001_initial_schema.sql
 -- Foundational tables: schema_version, sources, artists, albums, tracks
+--
+-- Connection-level PRAGMAs (journal_mode=WAL, synchronous=NORMAL,
+-- foreign_keys=ON) are configured in crypto/vault.rs via
+-- SqliteConnectOptions. They cannot live in this file: SQLx wraps each
+-- migration in a transaction, and SQLite refuses
+-- `PRAGMA synchronous=...` / `PRAGMA journal_mode=...` inside one
+-- ("Safety level may not be changed inside a transaction").
 -- ─────────────────────────────────────────────────────────────────────────
-
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-PRAGMA synchronous = NORMAL;
 
 CREATE TABLE schema_version (
     version     INTEGER NOT NULL,

@@ -14,9 +14,13 @@ path = "src/main.rs"
 
 [features]
 default = ["desktop", "s3"]
-desktop = ["dep:dioxus-desktop"]
-web     = ["dep:dioxus-web"]
-mobile  = ["dep:dioxus-mobile"]
+# Each platform feature must enable BOTH the renderer crate AND the
+# matching feature flag on `dioxus` itself. The dioxus crate's launch
+# function uses cfg(feature = "...") at compile time to pick a backend;
+# without `dioxus/desktop` it panics with "No platform feature enabled".
+desktop = ["dep:dioxus-desktop", "dioxus/desktop"]
+web     = ["dep:dioxus-web",     "dioxus/web"]
+mobile  = ["dep:dioxus-mobile",  "dioxus/mobile"]
 # Forward source-provider features to sonitus-core so orchestrator
 # `#[cfg(feature = "s3")]` etc. resolve in this crate too.
 s3      = ["sonitus-core/s3"]

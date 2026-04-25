@@ -11,7 +11,7 @@
 //! files are added; deleted files are removed; existing files are
 //! re-checked only if their mtime or size differs from what's in the DB.
 
-use crate::error::{Result, SonitusError};
+use crate::error::Result;
 use crate::library::{
     models::{Album, Artist, ScanState, Track, TrackFormat},
     queries,
