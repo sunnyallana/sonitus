@@ -137,8 +137,13 @@ pub async fn boot(boot_cfg: BootConfig) -> Result<(AppHandle, BootChannels)> {
     download_mgr.spawn_worker_pool();
 
     // Player engine.
-    let resolver: Arc<dyn TrackResolver> =
-        Arc::new(LibraryTrackResolver::new(library.clone(), AppConfig::cache_dir()?));
+    let rt_handle = tokio::runtime::Handle::current();
+    let resolver: Arc<dyn TrackResolver> = Arc::new(LibraryTrackResolver::new(
+        library.clone(),
+        AppConfig::cache_dir()?,
+        sources.clone(),
+        rt_handle,
+    ));
     let player = engine::spawn(resolver);
 
     let handle = AppHandle {
@@ -157,42 +162,109 @@ pub async fn boot(boot_cfg: BootConfig) -> Result<(AppHandle, BootChannels)> {
 /// Resolve a track ID into a [`Track`] + a playable local file path.
 ///
 /// If the track has already been cached locally, returns that path.
-/// Otherwise falls back to the source's remote path, which the player
-/// engine will stream from. (Streaming straight from a `SourceProvider`
-/// requires async; this resolver is sync because the decode thread is
-/// not async. Streaming sources should be downloaded-on-demand by the
-/// orchestrator before play, then resolved from cache.)
+/// Otherwise asks the source provider for the local path (LocalSource
+/// joins root + relative). Streaming sources without a local path must
+/// be downloaded into the offline cache before play.
 struct LibraryTrackResolver {
     library: Library,
     cache_dir: std::path::PathBuf,
+    sources: Arc<HashMap<String, Arc<dyn SourceProvider>>>,
+    /// Captured at boot. The decode thread is a `std::thread::spawn` (not
+    /// a Tokio worker), so `futures::executor::block_on` panics inside
+    /// sqlx. We use this Handle to enter the Tokio runtime context for
+    /// the duration of each DB lookup.
+    rt_handle: tokio::runtime::Handle,
 }
 
 impl LibraryTrackResolver {
-    fn new(library: Library, cache_dir: std::path::PathBuf) -> Self {
-        Self { library, cache_dir }
+    fn new(
+        library: Library,
+        cache_dir: std::path::PathBuf,
+        sources: Arc<HashMap<String, Arc<dyn SourceProvider>>>,
+        rt_handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self { library, cache_dir, sources, rt_handle }
     }
 }
 
 impl TrackResolver for LibraryTrackResolver {
     fn resolve(&self, track_id: &str) -> Result<(sonitus_core::library::Track, std::path::PathBuf)> {
-        // sqlx is async; bridge to sync via the global runtime if we're
-        // already inside one, otherwise build a tiny one-shot runtime.
         let pool = self.library.pool().clone();
         let tid = track_id.to_string();
-        let track = futures::executor::block_on(async move {
+        // Enter the Tokio runtime context so sqlx can find its reactor.
+        let track = self.rt_handle.block_on(async move {
             queries::tracks::by_id(&pool, &tid).await
         })?;
 
-        // Pick the local cache path if set, else compute from content hash.
-        let path = match (&track.local_cache_path, &track.content_hash) {
-            (Some(p), _) => std::path::PathBuf::from(p),
-            (None, Some(hash)) => sonitus_core::library::models::cache_path_for(&self.cache_dir, hash),
-            (None, None) => {
-                // Local source provider: remote_path IS the local path.
-                std::path::PathBuf::from(&track.remote_path)
-            }
+        // Resolve the absolute file path:
+        //   1. Local cache (downloaded copy) wins if set.
+        //   2. Otherwise ask the source provider — LocalSource joins
+        //      root + relative; cloud sources return None.
+        //   3. Fall back to the BLAKE3-keyed cache location for files
+        //      that have been hashed but not downloaded.
+        let path = if let Some(p) = track.local_cache_path.as_ref().filter(|s| !s.is_empty()) {
+            std::path::PathBuf::from(p)
+        } else if let Some(source) = self.sources.get(&track.source_id) {
+            source.local_path(&track.remote_path).ok_or_else(|| {
+                crate::orchestrator::resolve_error(format!(
+                    "source '{}' is remote; download the track first",
+                    track.source_id
+                ))
+            })?
+        } else if let Some(hash) = &track.content_hash {
+            sonitus_core::library::models::cache_path_for(&self.cache_dir, hash)
+        } else {
+            return Err(crate::orchestrator::resolve_error(format!(
+                "track {} has no local path and no content hash",
+                track_id
+            )));
         };
         Ok((track, path))
+    }
+}
+
+/// Helper: typed error for path-resolution failures.
+pub(crate) fn resolve_error(msg: String) -> sonitus_core::error::SonitusError {
+    sonitus_core::error::SonitusError::Audio(msg)
+}
+
+/// If the engine reports a duration that differs from what the DB row
+/// has (typical case: CBR mp3 where the scanner couldn't get duration
+/// from headers), backfill the DB so the tracks list shows the correct
+/// time without re-playing.
+async fn persist_duration_if_new(
+    library: &sonitus_core::library::Library,
+    track: &sonitus_core::library::Track,
+    discovered_ms: u64,
+    library_signal: &mut Signal<LibraryState>,
+) {
+    let pool = library.pool();
+    if discovered_ms == 0 {
+        return;
+    }
+    let stored = track.duration_ms.unwrap_or(0).max(0) as u64;
+    // Only update if missing or differs by more than a second
+    // (avoid churn from rounding noise).
+    if stored == 0 || stored.abs_diff(discovered_ms) > 1_000 {
+        if let Err(e) = sonitus_core::library::queries::tracks::set_duration_ms(
+            pool,
+            &track.id,
+            discovered_ms as i64,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "failed to persist track duration");
+        } else {
+            tracing::info!(
+                track_id = %track.id,
+                discovered_ms,
+                "persisted discovered track duration"
+            );
+            // Bump the library version so any open use_resource that
+            // depends on it re-runs and picks up the new duration.
+            let next = library_signal.peek().version.wrapping_add(1);
+            library_signal.write().version = next;
+        }
     }
 }
 
@@ -390,6 +462,17 @@ pub fn start_event_pump(
             tokio::select! {
                 _ = tick.tick() => {
                     while let Some(evt) = handle.player.try_next_event() {
+                        // Pre-process Playing events to backfill the DB
+                        // when the engine discovered the track's true
+                        // duration (e.g. CBR mp3 packet walk).
+                        if let PlayerEvent::Playing { ref track, duration_ms } = evt {
+                            persist_duration_if_new(
+                                &handle.library,
+                                track,
+                                duration_ms,
+                                &mut library_state,
+                            ).await;
+                        }
                         apply_player_event(&mut player_state, evt);
                     }
                 }

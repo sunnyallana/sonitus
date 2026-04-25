@@ -187,6 +187,21 @@ pub async fn mark_played(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Update only the duration of a track. Used by the player engine to
+/// backfill durations discovered at playback time (e.g. CBR mp3 packet
+/// walks) so the tracks list shows the correct time without requiring
+/// the user to play each track first.
+pub async fn set_duration_ms(pool: &SqlitePool, id: &str, duration_ms: i64) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("UPDATE tracks SET duration_ms = ?, updated_at = ? WHERE id = ?")
+        .bind(duration_ms)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Set the user rating for a track (0-5 or NULL to clear).
 pub async fn set_rating(pool: &SqlitePool, id: &str, rating: Option<i32>) -> Result<()> {
     let now = chrono::Utc::now().timestamp();

@@ -29,13 +29,33 @@ pub trait SampleSource: Send + 'static {
 /// Owner of a `cpal::Stream`. Drop to stop playback.
 pub struct NativeOutput {
     /// Held to keep the audio stream alive. Dropping stops playback.
-    _stream: Stream,
+    /// Used directly for pause()/resume() so audio stops at the device
+    /// level rather than waiting for the 5-second ring buffer to drain.
+    stream: Stream,
     /// Selected device name for the engine to report back.
     pub device_name: String,
     /// The sample rate cpal chose for the stream.
     pub sample_rate_hz: u32,
     /// Number of channels in the stream.
     pub channels: u16,
+}
+
+impl NativeOutput {
+    /// Stop the cpal stream from pulling samples. Audio output goes
+    /// silent immediately; existing buffered samples stay in the ring
+    /// for resume().
+    pub fn pause(&self) {
+        if let Err(e) = self.stream.pause() {
+            tracing::warn!(error = %e, "cpal stream.pause() failed");
+        }
+    }
+
+    /// Resume the cpal stream after pause().
+    pub fn resume(&self) {
+        if let Err(e) = self.stream.play() {
+            tracing::warn!(error = %e, "cpal stream.play() failed");
+        }
+    }
 }
 
 impl NativeOutput {
@@ -54,8 +74,9 @@ impl NativeOutput {
         Ok(names)
     }
 
-    /// Open the default output device and start a stream that pulls from
-    /// `source`. The returned `NativeOutput` keeps the stream alive.
+    /// Open the default output device and start a stream at the device's
+    /// preferred format. The decoder is responsible for resampling its
+    /// output to match `sample_rate_hz` and `channels` (see `DecodeStream`).
     pub fn start_default<S: SampleSource>(mut source: S) -> Result<Self> {
         let host = cpal::default_host();
         let device = host
@@ -63,11 +84,16 @@ impl NativeOutput {
             .ok_or_else(|| SonitusError::AudioOutput("no default output device".into()))?;
         let device_name = device.name().unwrap_or_else(|_| "<unknown>".into());
 
-        let config = device
+        // Negotiate at the device's true preferred format — the OS will
+        // never lie about this. Then the decoder resamples to match.
+        // (Earlier we tried to *request* the file's rate and let WASAPI
+        // resample; that caused unreliable behavior on shared-mode where
+        // Windows silently substitutes the default rate.)
+        let supported = device
             .default_output_config()
             .map_err(|e| SonitusError::AudioOutput(e.to_string()))?;
-        let sample_format = config.sample_format();
-        let stream_config: StreamConfig = config.into();
+        let sample_format = supported.sample_format();
+        let stream_config: StreamConfig = supported.into();
         let sample_rate_hz = stream_config.sample_rate.0;
         let channels = stream_config.channels;
 
@@ -124,7 +150,7 @@ impl NativeOutput {
             .map_err(|e| SonitusError::AudioOutput(e.to_string()))?;
 
         Ok(Self {
-            _stream: stream,
+            stream,
             device_name,
             sample_rate_hz,
             channels,

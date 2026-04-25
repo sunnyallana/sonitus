@@ -84,6 +84,25 @@ pub trait SourceProvider: Send + Sync + 'static {
     /// Recursively list every audio file under the source's root.
     async fn list_files(&self) -> Result<Vec<RemoteFile>>;
 
+    /// Streaming variant of [`list_files`]: emits each file on `tx` as it
+    /// is discovered, instead of returning a `Vec`. Lets the scanner
+    /// interleave discovery and processing — important for large or slow
+    /// sources where the walk itself can take many seconds.
+    ///
+    /// Default implementation collects everything via `list_files` and
+    /// fans out, giving slow but correct behavior for free; backends that
+    /// can iterate naturally (filesystem walk, paginated cloud APIs)
+    /// should override.
+    async fn discover(&self, tx: tokio::sync::mpsc::Sender<RemoteFile>) -> Result<()> {
+        let files = self.list_files().await?;
+        for f in files {
+            if tx.send(f).await.is_err() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Open a streaming reader for `path`, optionally restricted to a
     /// byte range. Range support is required for efficient seeking.
     async fn stream(
@@ -105,4 +124,16 @@ pub trait SourceProvider: Send + Sync + 'static {
     /// Read the first `max_bytes` of `path`. Used to extract tags
     /// without downloading the entire file.
     async fn read_bytes(&self, path: &str, max_bytes: usize) -> Result<Bytes>;
+
+    /// If this source's content lives directly on the local filesystem,
+    /// translate a `RemoteFile`-style path back into an absolute
+    /// filesystem path the player can open with `std::fs::File::open`.
+    /// Returns `None` for cloud / network sources that don't have a
+    /// stable local path (those are downloaded into the offline cache
+    /// before playback).
+    ///
+    /// Default: `None`. Override in [`local::LocalSource`].
+    fn local_path(&self, _path: &str) -> Option<std::path::PathBuf> {
+        None
+    }
 }

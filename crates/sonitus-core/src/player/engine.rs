@@ -121,6 +121,12 @@ struct EngineState {
     paused: bool,
     /// Duration of the current track in milliseconds.
     duration_ms: u64,
+    /// Position in ms at which the ring was last started/cleared. This
+    /// gets added to `frames_played / rate` to derive the absolute
+    /// position. Set to 0 on a fresh play, set to the seek target on Seek.
+    /// Without this, every Seek would visually reset position to 0:00
+    /// because we clear the ring (and its frames_written counter).
+    seek_offset_ms: u64,
     evt: Sender<PlayerEvent>,
     resolver: Arc<dyn TrackResolver>,
     /// Current track being played (for emitting events).
@@ -144,6 +150,7 @@ impl EngineState {
             output_device: None,
             paused: false,
             duration_ms: 0,
+            seek_offset_ms: 0,
             evt,
             resolver,
             current_track: None,
@@ -230,7 +237,15 @@ impl EngineState {
         }
     }
 
-    /// Position in ms = (frames_written - buffered_frames) / sample_rate.
+    /// Position in ms relative to the start of the track.
+    ///
+    /// = `seek_offset_ms` + (frames_played / output_rate) * 1000
+    ///
+    /// `frames_played` is the number of frames that have actually left
+    /// the ring (decoded - still-buffered). The offset is needed because
+    /// every seek calls `ring.clear()`, resetting the ring's
+    /// `frames_written` counter to zero — without an explicit offset the
+    /// reported position would jump back to 0:00 after each seek.
     fn position_ms(&self) -> u64 {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -240,11 +255,12 @@ impl EngineState {
             let buffered_samples = self.ring.buffered_samples() as u64;
             let buffered_frames = buffered_samples / channels;
             let played_frames = written.saturating_sub(buffered_frames);
-            played_frames.saturating_mul(1000) / rate
+            let elapsed_since_seek_ms = played_frames.saturating_mul(1000) / rate;
+            self.seek_offset_ms.saturating_add(elapsed_since_seek_ms)
         }
         #[cfg(target_arch = "wasm32")]
         {
-            0
+            self.seek_offset_ms
         }
     }
 
@@ -272,11 +288,23 @@ impl EngineState {
             }
             PlayerCommand::Pause => {
                 self.paused = true;
+                // Pause the cpal stream itself so audio stops *now*. If
+                // we only set self.paused = true, the device keeps
+                // pulling from the ring (~5s of buffered audio) before
+                // going silent — that's why pause felt slow.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(out) = &self.output {
+                    out.pause();
+                }
                 let pos = self.position_ms();
                 let _ = self.evt.send(PlayerEvent::Paused { position_ms: pos });
             }
             PlayerCommand::Resume => {
                 self.paused = false;
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(out) = &self.output {
+                    out.resume();
+                }
                 let pos = self.position_ms();
                 let _ = self.evt.send(PlayerEvent::Resumed { position_ms: pos });
             }
@@ -284,6 +312,7 @@ impl EngineState {
                 self.paused = false;
                 self.current_track = None;
                 self.duration_ms = 0;
+                self.seek_offset_ms = 0;
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.decoder = None;
@@ -293,13 +322,17 @@ impl EngineState {
                 let _ = self.evt.send(PlayerEvent::Stopped);
             }
             PlayerCommand::Seek { seconds } => {
+                let pos_ms = (seconds.max(0.0) * 1000.0) as u64;
+                // Reseat position-tracking. ring.clear() (inside seek_to)
+                // wipes frames_written; without this update position_ms()
+                // would return 0 immediately after every seek.
+                self.seek_offset_ms = pos_ms;
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(decoder) = self.decoder.as_mut() {
                     if let Err(e) = decoder.seek_to(seconds) {
                         let _ = self.evt.send(PlayerEvent::Error { message: e.to_string() });
                     }
                 }
-                let pos_ms = (seconds.max(0.0) * 1000.0) as u64;
                 let _ = self.evt.send(PlayerEvent::Progress {
                     position_ms: pos_ms,
                     duration_ms: self.duration_ms,
@@ -324,6 +357,7 @@ impl EngineState {
             PlayerCommand::Prev => {
                 let pos = self.position_ms();
                 if pos > 3_000 {
+                    self.seek_offset_ms = 0;
                     #[cfg(not(target_arch = "wasm32"))]
                     if let Some(decoder) = self.decoder.as_mut() {
                         let _ = decoder.seek_to(0.0);
@@ -369,6 +403,7 @@ impl EngineState {
     fn stop_internal(&mut self) {
         self.current_track = None;
         self.duration_ms = 0;
+        self.seek_offset_ms = 0;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.decoder = None;
@@ -379,6 +414,9 @@ impl EngineState {
     }
 
     fn play_track(&mut self, track_id: &str) {
+        // New track: position counter resets, ring will be cleared.
+        self.seek_offset_ms = 0;
+
         let (track, path) = match self.resolver.resolve(track_id) {
             Ok(v) => v,
             Err(e) => {
@@ -404,30 +442,46 @@ impl EngineState {
             self.decoder = None;
             self.ring.clear();
 
+            // Open the cpal stream lazily on first play. Same stream is
+            // reused across tracks because the decoder resamples to the
+            // device's rate.
+            if self.output.is_none() {
+                match NativeOutput::start_default(self.ring.clone()) {
+                    Ok(out) => {
+                        tracing::info!(
+                            rate = out.sample_rate_hz,
+                            channels = out.channels,
+                            device = %out.device_name,
+                            "audio output configured (decoder will resample to this)"
+                        );
+                        let _ = self.evt.send(PlayerEvent::OutputDeviceChanged {
+                            device_name: out.device_name.clone(),
+                        });
+                        self.output = Some(out);
+                    }
+                    Err(e) => {
+                        let _ = self.evt.send(PlayerEvent::Error { message: e.to_string() });
+                        return;
+                    }
+                }
+            }
+
+            // Tell the ring what the OUTPUT format is so DecodeStream can
+            // build its resampler with the correct ratio.
+            let (out_rate, out_channels) = self
+                .output
+                .as_ref()
+                .map(|o| (o.sample_rate_hz, o.channels))
+                .unwrap_or((44_100, 2));
+            self.ring.set_output_format(out_rate, out_channels);
+
             match DecodeStream::open_file(&path, self.ring.clone(), gain) {
                 Ok(decoder) => {
-                    // Lazily create the cpal stream the first time we play.
-                    if self.output.is_none() {
-                        match NativeOutput::start_default(self.ring.clone()) {
-                            Ok(out) => {
-                                let _ = self.evt.send(PlayerEvent::OutputDeviceChanged {
-                                    device_name: out.device_name.clone(),
-                                });
-                                self.output = Some(out);
-                            }
-                            Err(e) => {
-                                let _ = self.evt.send(PlayerEvent::Error { message: e.to_string() });
-                                return;
-                            }
-                        }
-                    }
-
                     // If Symphonia knew the duration, prefer that — tag
                     // duration is sometimes wrong/missing.
                     if let Some(secs) = decoder.duration_secs {
                         self.duration_ms = (secs * 1000.0) as u64;
                     }
-
                     self.decoder = Some(decoder);
                     self.current_track = Some(track.clone());
                     self.paused = false;
