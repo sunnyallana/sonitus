@@ -7,6 +7,11 @@
 // Dioxus components are PascalCase by convention; this allow keeps rust-analyzer
 // from yelling about every component name.
 #![allow(non_snake_case)]
+// Many state structs and platform-shim helpers are intentionally part of
+// the public surface for future wiring (e.g. preference fields the
+// settings UI doesn't yet read, MediaSession trait for OS media keys).
+// Allow dead-code at crate level rather than scattering #[allow] everywhere.
+#![allow(dead_code)]
 
 mod app;
 mod components;

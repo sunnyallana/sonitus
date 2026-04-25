@@ -22,7 +22,10 @@ sonitus-core = { path = "crates/sonitus-core", version = "0.1.0" }
 sonitus-meta = { path = "crates/sonitus-meta", version = "0.1.0" }
 
 # ── UI (Dioxus 0.7.6) ────────────────────────────────────────────────────────
-dioxus              = { version = "0.7.6", features = ["fullstack", "router"] }
+# Note: platform features (desktop / web / mobile) are forwarded by
+# sonitus-ui's own feature gates; the main dioxus crate gets only `router`
+# at the workspace level so each platform binary can opt in cleanly.
+dioxus              = { version = "0.7.6", features = ["router"] }
 dioxus-desktop      = { version = "0.7.6" }
 dioxus-web          = { version = "0.7.6" }
 dioxus-mobile       = { version = "0.7.0-alpha.2" }

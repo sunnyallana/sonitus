@@ -13,7 +13,7 @@
 //!   "Led Zeppelin").
 
 use crate::error::Result;
-use crate::library::models::{Album, Artist, Track};
+use crate::library::models::{Album, Artist};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use strum::Display;

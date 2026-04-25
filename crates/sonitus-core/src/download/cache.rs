@@ -133,10 +133,12 @@ impl OfflineCache {
 // `filetime` is a tiny crate; if absent we fall back to set_modified via OpenOptions.
 mod filetime {
     use std::path::Path;
-    use std::time::SystemTime;
-    pub struct FileTime(SystemTime);
+    /// Marker type for "now"; the real `filetime` crate carries a SystemTime,
+    /// but our fallback only needs a token to make the API call site read
+    /// naturally. The unit value carries no information.
+    pub struct FileTime;
     impl FileTime {
-        pub fn now() -> Self { FileTime(SystemTime::now()) }
+        pub fn now() -> Self { FileTime }
     }
     pub fn set_file_mtime(path: &Path, _t: FileTime) -> std::io::Result<()> {
         // Not perfectly atomic without the `filetime` crate, but for LRU
