@@ -13,6 +13,7 @@ use dioxus::prelude::*;
 mod app;
 mod components;
 mod hooks;
+mod orchestrator;
 mod platform;
 mod routes;
 mod state;

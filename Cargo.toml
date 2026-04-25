@@ -25,11 +25,11 @@ sonitus-meta = { path = "crates/sonitus-meta", version = "0.1.0" }
 dioxus              = { version = "0.7.6", features = ["fullstack", "router"] }
 dioxus-desktop      = { version = "0.7.6" }
 dioxus-web          = { version = "0.7.6" }
-dioxus-mobile       = { version = "0.7.6" }
+dioxus-mobile       = { version = "0.7.0-alpha.2" }
 dioxus-sdk          = { version = "0.7.0", features = ["storage"] }
 
 # ── Audio ─────────────────────────────────────────────────────────────────────
-symphonia           = { version = "0.6.0-alpha.1", features = ["all-formats", "all-codecs", "opt-simd"] }
+symphonia           = { version = "0.6.0-alpha.2", features = ["all-formats", "all-codecs", "opt-simd"] }
 cpal                = { version = "0.15.3" }
 
 # ── Async runtime ─────────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ async-trait         = { version = "0.1" }
 futures             = { version = "0.3" }
 
 # ── HTTP — rustls-tls ONLY ────────────────────────────────────────────────────
-reqwest             = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-tls", "multipart", "gzip"] }
+reqwest             = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "multipart", "gzip"] }
 reqwest-middleware  = { version = "0.4" }
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -92,11 +92,11 @@ pavao               = { version = "0.2", features = ["vendored"] }
 blake3              = { version = "1.5" }
 
 # ── Cryptography (pure Rust) ──────────────────────────────────────────────────
-chacha20poly1305    = { version = "0.10.1", features = ["xchacha20poly1305"] }
+chacha20poly1305    = { version = "0.10.1" }
 aes-gcm             = { version = "0.10.3", features = ["aes"] }
 argon2              = { version = "0.5.3",  features = ["zeroize"] }
 zeroize             = { version = "1.8",    features = ["derive", "zeroize_derive"] }
-rand                = { version = "0.9",    features = ["getrandom"] }
+rand                = { version = "0.9",    features = ["os_rng", "thread_rng"] }
 getrandom           = { version = "0.3" }
 sha2                = { version = "0.10" }
 
