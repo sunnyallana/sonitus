@@ -33,6 +33,8 @@ pub mod queue;
 pub mod replaygain;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod decode;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod output_native;
 
 #[cfg(target_arch = "wasm32")]
@@ -42,3 +44,6 @@ pub use commands::{PlayerCommand, RepeatMode};
 pub use engine::PlayerHandle;
 pub use events::PlayerEvent;
 pub use queue::PlayQueue;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use decode::{AudioRing, DecodeStream};

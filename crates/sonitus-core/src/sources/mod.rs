@@ -29,6 +29,7 @@ pub mod s3;
 pub mod dropbox;
 pub mod google_drive;
 pub mod http;
+pub mod oauth_callback;
 pub mod onedrive;
 
 use crate::error::Result;

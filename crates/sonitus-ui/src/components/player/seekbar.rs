@@ -1,9 +1,10 @@
 //! Scrub bar showing playback progress.
 
+use crate::app::use_app_handle;
 use crate::hooks::use_player::use_player;
 use dioxus::prelude::*;
 
-/// Seekbar — shows played/buffered/remaining.
+/// Seekbar — shows played/buffered/remaining and supports click-to-seek.
 #[component]
 pub fn Seekbar() -> Element {
     let player = use_player();
@@ -11,6 +12,20 @@ pub fn Seekbar() -> Element {
     let state = player.read();
     let cur = format_time(state.position_ms);
     let total = format_time(state.duration_ms);
+
+    let handle = use_app_handle();
+    let dur_ms = state.duration_ms;
+    let on_click = move |evt: MouseEvent| {
+        let Some(handle) = handle.clone() else { return; };
+        if dur_ms == 0 { return; }
+        // Best-effort: client coords on the element. The element is sized
+        // 100% of its container; we use the offset_x against the bar width.
+        let coords = evt.element_coordinates();
+        let bar_width = 600.0; // CSS-controlled; this is a fallback estimate.
+        let frac = (coords.x / bar_width).clamp(0.0, 1.0);
+        let target_secs = (dur_ms as f64 / 1000.0) * frac;
+        handle.seek(target_secs);
+    };
 
     rsx! {
         div { class: "seekbar",
@@ -20,6 +35,7 @@ pub fn Seekbar() -> Element {
                 aria_valuemax: "{state.duration_ms}",
                 aria_valuenow: "{state.position_ms}",
                 aria_label: "Track position",
+                onclick: on_click,
                 div { class: "seekbar__played", style: "width: {pct}%" }
             }
             span { class: "seekbar__time seekbar__time--total", "{total}" }
