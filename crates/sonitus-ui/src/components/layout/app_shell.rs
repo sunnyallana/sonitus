@@ -18,6 +18,7 @@ use crate::app::use_app_handle;
 use crate::components::layout::{
     bottom_nav::BottomNav, now_playing_bar::NowPlayingBar, sidebar::Sidebar, topbar::Topbar,
 };
+use crate::components::player::queue_panel::QueuePanel;
 use crate::components::playlists::add_to_playlist_dialog::AddToPlaylistDialog;
 use crate::components::playlists::new_playlist_dialog::NewPlaylistDialog;
 use crate::hooks::use_player::use_player;
@@ -144,10 +145,11 @@ pub fn AppShell() -> Element {
             }
             NowPlayingBar {}
             BottomNav {}
-            // App-wide dialogs — render once at shell level so any page
-            // can open them by writing the corresponding state signal.
+            // App-wide dialogs / overlays — render once at shell level so
+            // any page can open them by writing the corresponding signal.
             NewPlaylistDialog {}
             AddToPlaylistDialog {}
+            QueuePanel {}
         }
     }
 }

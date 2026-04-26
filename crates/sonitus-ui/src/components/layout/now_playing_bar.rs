@@ -2,6 +2,7 @@
 
 use crate::components::library::cover_art::CoverArt;
 use crate::components::player::controls::Controls;
+use crate::components::player::queue_panel::QueuePanelState;
 use crate::components::player::seekbar::Seekbar;
 use crate::components::player::volume_control::VolumeControl;
 use crate::hooks::use_player::use_player;
@@ -13,6 +14,13 @@ use dioxus::prelude::*;
 pub fn NowPlayingBar() -> Element {
     let player = use_player();
     let state = player.read();
+    let mut queue_state = use_context::<Signal<QueuePanelState>>();
+
+    let queue_count = state.queue.len();
+    let toggle_queue = move |_| {
+        let was_open = queue_state.read().open;
+        queue_state.write().open = !was_open;
+    };
 
     // When no track is loaded, render a clearly visible idle bar so the
     // user can see where playback controls *will* appear, plus surface
@@ -51,6 +59,16 @@ pub fn NowPlayingBar() -> Element {
                 Seekbar {}
             }
             div { class: "now-playing-bar__right",
+                button {
+                    class: "now-playing-bar__queue-btn",
+                    title: "Toggle queue",
+                    aria_label: "Toggle queue",
+                    onclick: toggle_queue,
+                    "☰"
+                    if queue_count > 0 {
+                        span { class: "now-playing-bar__queue-count", "{queue_count}" }
+                    }
+                }
                 VolumeControl {}
             }
         }

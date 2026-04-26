@@ -67,9 +67,34 @@ pub struct AppConfig {
     /// so playback resumes at the level they left it. Default 1.0.
     #[serde(default = "default_volume")]
     pub last_volume: f32,
+
+    /// Output device name (matches `NativeOutput::list_devices`). `None`
+    /// means use the system default.
+    #[serde(default)]
+    pub output_device: Option<String>,
+
+    /// Override directory for downloaded media. `None` means use the
+    /// platform-default cache directory under `data_dir`.
+    #[serde(default)]
+    pub download_location: Option<PathBuf>,
+
+    /// Default view for the library landing page (grid vs. list).
+    #[serde(default)]
+    pub library_view: LibraryView,
 }
 
 fn default_volume() -> f32 { 1.0 }
+
+/// Library landing-page layout preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LibraryView {
+    /// Grid of album covers.
+    #[default]
+    Grid,
+    /// Flat list of tracks.
+    List,
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -88,6 +113,9 @@ impl Default for AppConfig {
             theme: Theme::System,
             accent_color: "#1DB954".to_string(),
             last_volume: 1.0,
+            output_device: None,
+            download_location: None,
+            library_view: LibraryView::Grid,
         }
     }
 }
