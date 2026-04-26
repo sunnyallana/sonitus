@@ -1,6 +1,7 @@
 //! Albums grid — grid/list, sortable.
 
 use crate::app::use_app_handle;
+use crate::components::library::cover_art::CoverArt;
 use crate::routes::Route;
 use dioxus::prelude::*;
 use sonitus_core::library::{Album, queries};
@@ -47,7 +48,7 @@ fn AlbumTile(album: Album) -> Element {
     let year = album.year.map(|y| y.to_string()).unwrap_or_default();
     rsx! {
         Link { to: Route::AlbumDetail { id: id.clone() }, class: "album-tile",
-            div { class: "album-tile__cover" }
+            CoverArt { album_id: Some(album.id.clone()), size_class: "cover-art--lg".to_string() }
             div { class: "album-tile__title", "{album.title}" }
             div { class: "album-tile__year", "{year}" }
         }

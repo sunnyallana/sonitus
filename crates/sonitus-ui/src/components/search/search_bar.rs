@@ -1,24 +1,25 @@
-//! Debounced search input with Cmd/Ctrl+K shortcut.
+//! Top-bar search input. Submitting navigates to /search?q=…
 
-use crate::hooks::use_search::use_search;
+use crate::routes::Route;
 use dioxus::prelude::*;
 
-/// Top-bar search input.
+/// Top-bar search input. Type → press Enter → routes to the results page.
 #[component]
 pub fn SearchBar() -> Element {
     let mut query = use_signal(String::new);
-    let search = use_search();
+    let nav = navigator();
 
     rsx! {
         form { class: "search-bar", role: "search",
             onsubmit: move |evt| {
                 evt.prevent_default();
-                let q = query.read().clone();
-                search.set_query(q);
+                let q = query.read().trim().to_string();
+                if q.is_empty() { return; }
+                nav.push(Route::SearchResults { q });
             },
             input { class: "search-bar__input",
                 r#type: "search",
-                placeholder: "Search tracks, albums, artists...",
+                placeholder: "Search tracks, albums, artists... (press Enter)",
                 aria_label: "Search the library",
                 value: "{query}",
                 oninput: move |evt| query.set(evt.value()),

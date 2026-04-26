@@ -1,5 +1,6 @@
 //! Sticky now-playing bar at the bottom of every page.
 
+use crate::components::library::cover_art::CoverArt;
 use crate::components::player::controls::Controls;
 use crate::components::player::seekbar::Seekbar;
 use crate::components::player::volume_control::VolumeControl;
@@ -35,11 +36,8 @@ pub fn NowPlayingBar() -> Element {
     rsx! {
         div { class: "now-playing-bar", role: "region", aria_label: "Now playing",
             div { class: "now-playing-bar__track",
-                div { class: "now-playing-bar__art",
-                    Link { to: Route::NowPlayingFull {},
-                        // Cover art stub: real cover would render an <img>
-                        // sourced from the track's album.cover_art_blob.
-                    }
+                Link { to: Route::NowPlayingFull {}, class: "now-playing-bar__art-link",
+                    CoverArt { album_id: track.album_id.clone(), size_class: "cover-art--sm".to_string() }
                 }
                 div { class: "now-playing-bar__meta",
                     div { class: "now-playing-bar__title", "{track.title}" }

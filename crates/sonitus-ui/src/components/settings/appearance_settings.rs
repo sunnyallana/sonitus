@@ -1,32 +1,55 @@
-//! Appearance settings.
+//! Appearance settings — wired to SettingsState (persists to config.toml).
 
+use crate::state::settings_state::SettingsState;
 use dioxus::prelude::*;
+use sonitus_core::config::Theme;
 
 /// Appearance settings.
 #[component]
 pub fn AppearanceSettings() -> Element {
+    let mut settings = use_context::<Signal<SettingsState>>();
+    let snap = settings.read().clone();
+    let theme = snap.config.theme;
+    let theme_value = match theme {
+        Theme::Dark => "dark",
+        Theme::Light => "light",
+        Theme::System => "system",
+    };
+    let accent = snap.config.accent_color.clone();
+
+    let on_theme = move |evt: FormEvent| {
+        let new = match evt.value().as_str() {
+            "dark" => Theme::Dark,
+            "light" => Theme::Light,
+            _ => Theme::System,
+        };
+        settings.write().set_theme(new);
+    };
+
+    let on_accent = move |evt: FormEvent| {
+        let v = evt.value();
+        let mut s = settings.write();
+        s.config.accent_color = v;
+        // Re-apply the existing theme to trigger persistence; .set_theme
+        // is what owns the write-through-to-disk path.
+        let cur = s.config.theme;
+        s.set_theme(cur);
+    };
+
     rsx! {
         section { class: "settings-page",
             h1 { "Appearance" }
             label { class: "field",
                 span { class: "field__label", "Theme" }
-                select { class: "select",
-                    option { value: "system", "Match system" }
-                    option { value: "dark", selected: true, "Dark" }
-                    option { value: "light", "Light" }
+                select { class: "select", value: "{theme_value}", onchange: on_theme,
+                    option { value: "system", selected: matches!(theme, Theme::System), "Match system" }
+                    option { value: "dark",   selected: matches!(theme, Theme::Dark),   "Dark" }
+                    option { value: "light",  selected: matches!(theme, Theme::Light),  "Light" }
                 }
             }
             label { class: "field",
                 span { class: "field__label", "Accent color" }
-                input { r#type: "color", value: "#1DB954", class: "color-picker" }
-            }
-            label { class: "field",
-                span { class: "field__label", "Font size" }
-                select { class: "select",
-                    option { value: "small", "Small" }
-                    option { value: "medium", selected: true, "Medium" }
-                    option { value: "large", "Large" }
-                }
+                input { r#type: "color", value: "{accent}", class: "color-picker", onchange: on_accent }
             }
             label { class: "field",
                 span { class: "field__label", "Library default view" }

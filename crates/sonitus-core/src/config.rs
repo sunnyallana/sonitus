@@ -62,7 +62,14 @@ pub struct AppConfig {
 
     /// UI: Accent color as a hex string `#RRGGBB`.
     pub accent_color: String,
+
+    /// Last volume the user set, in `0.0..=1.0`. Restored on next launch
+    /// so playback resumes at the level they left it. Default 1.0.
+    #[serde(default = "default_volume")]
+    pub last_volume: f32,
 }
+
+fn default_volume() -> f32 { 1.0 }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -80,6 +87,7 @@ impl Default for AppConfig {
             buffer_size: BufferSize::Medium,
             theme: Theme::System,
             accent_color: "#1DB954".to_string(),
+            last_volume: 1.0,
         }
     }
 }
