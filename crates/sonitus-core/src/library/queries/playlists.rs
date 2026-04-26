@@ -90,6 +90,32 @@ pub async fn set_description(pool: &SqlitePool, id: &str, description: Option<&s
     Ok(())
 }
 
+/// Update a smart playlist's name, description, and serialized rules JSON.
+/// Only valid for `is_smart = 1` playlists; manual playlists ignore the rules
+/// column.
+pub async fn update_smart(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    description: Option<&str>,
+    rules_json: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "UPDATE playlists
+            SET name = ?, description = ?, smart_rules = ?, updated_at = ?
+          WHERE id = ?",
+    )
+    .bind(name)
+    .bind(description)
+    .bind(rules_json)
+    .bind(now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Delete a playlist (and its membership rows via FK cascade).
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM playlists WHERE id = ?")

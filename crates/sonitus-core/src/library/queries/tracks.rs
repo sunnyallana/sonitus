@@ -187,6 +187,51 @@ pub async fn mark_played(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// One track row enriched with the names of its artist + album, ready
+/// for tabular display without N+1 lookups.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
+pub struct TrackView {
+    /// Track ID.
+    pub id: String,
+    /// Track title.
+    pub title: String,
+    /// Joined artist name (NULL if track has no artist or it was deleted).
+    pub artist_id: Option<String>,
+    /// Joined artist display name.
+    pub artist_name: Option<String>,
+    /// Album ID, if any.
+    pub album_id: Option<String>,
+    /// Joined album title.
+    pub album_title: Option<String>,
+    /// Genre tag.
+    pub genre: Option<String>,
+    /// Release year.
+    pub year: Option<i32>,
+    /// Duration in milliseconds.
+    pub duration_ms: Option<i64>,
+    /// Created-at unix timestamp.
+    pub created_at: i64,
+}
+
+/// Most-recently-added enriched track rows for the main Tracks list.
+pub async fn recently_added_view(pool: &SqlitePool, limit: i64) -> Result<Vec<TrackView>> {
+    Ok(sqlx::query_as::<_, TrackView>(
+        r"SELECT
+            t.id, t.title,
+            t.artist_id,
+            (SELECT name FROM artists WHERE id = t.artist_id) AS artist_name,
+            t.album_id,
+            (SELECT title FROM albums WHERE id = t.album_id) AS album_title,
+            t.genre, t.year, t.duration_ms, t.created_at
+          FROM tracks t
+          ORDER BY t.created_at DESC
+          LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// Update only the duration of a track. Used by the player engine to
 /// backfill durations discovered at playback time (e.g. CBR mp3 packet
 /// walks) so the tracks list shows the correct time without requiring

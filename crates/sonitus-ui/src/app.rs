@@ -15,9 +15,11 @@ use crate::state::{
     library_state::{LibraryState, install_library_state},
     player_state::{PlayerState, install_player_state},
     search_state::install_search_state,
-    settings_state::install_settings_state,
+    settings_state::{SettingsState, install_settings_state},
 };
 use dioxus::prelude::*;
+use sonitus_core::config::Theme;
+use sonitus_core::player::commands::PlayerCommand;
 
 const STYLE_CSS: Asset = asset!("/assets/styles/app.css");
 const FONT_INTER: Asset = asset!("/assets/fonts/Inter-Variable.woff2");
@@ -45,10 +47,19 @@ pub fn App() -> Element {
     install_player_state();
     install_download_state();
     install_search_state();
+    crate::components::playlists::add_to_playlist_dialog::install_add_to_playlist_state();
+    // NewPlaylistState lives at app scope so the add-to-playlist dialog
+    // can chain into "+ New playlist" from outside the playlists page.
+    use_context_provider(|| {
+        Signal::new(
+            crate::components::playlists::new_playlist_dialog::NewPlaylistState::default(),
+        )
+    });
 
     let player_signal = use_context::<Signal<PlayerState>>();
     let downloads_signal = use_context::<Signal<Vec<DownloadItem>>>();
     let library_signal = use_context::<Signal<LibraryState>>();
+    let mut settings_signal = use_context::<Signal<SettingsState>>();
 
     // Provide the boot status as context so any component can grab the
     // handle when it's available (e.g. clicking play needs it).
@@ -60,6 +71,18 @@ pub fn App() -> Element {
         boot_status.set(BootStatus::Loading);
         match orchestrator::boot(BootConfig { passphrase: "sonitus".into() }).await {
             Ok((handle, channels)) => {
+                // Hydrate the settings signal from the AppConfig loaded
+                // by the orchestrator, then apply the persisted volume
+                // to the player engine.
+                {
+                    let mut s = settings_signal.write();
+                    s.config = handle.config.clone();
+                    s.volume = handle.config.last_volume;
+                }
+                let _ = handle.player.send(PlayerCommand::SetVolume {
+                    amplitude: handle.config.last_volume,
+                });
+
                 orchestrator::start_event_pump(
                     handle.clone(),
                     channels,
@@ -77,6 +100,11 @@ pub fn App() -> Element {
     });
 
     let status = boot_status.read().clone();
+    let theme_attr = match settings_signal.read().config.theme {
+        Theme::Dark => "dark",
+        Theme::Light => "light",
+        Theme::System => "system",
+    };
 
     // The font preload Link is intentionally omitted: Dioxus 0.7's
     // document::Link doesn't expose the `as` attribute (Rust keyword); we'll
@@ -88,10 +116,15 @@ pub fn App() -> Element {
         document::Title { "Sonitus" }
         document::Meta { name: "color-scheme", content: "dark light" }
 
-        match status {
-            BootStatus::Idle | BootStatus::Loading => rsx! { BootScreen {} },
-            BootStatus::Ready(_) => rsx! { Router::<Route> {} },
-            BootStatus::Failed(msg) => rsx! { BootError { message: msg } },
+        // Wrap the app in a themed root so CSS custom properties under
+        // [data-theme="..."] resolve. We re-read settings_signal here so
+        // a live theme change re-renders this wrapper.
+        div { "data-theme": "{theme_attr}", class: "themed-root",
+            match status {
+                BootStatus::Idle | BootStatus::Loading => rsx! { BootScreen {} },
+                BootStatus::Ready(_) => rsx! { Router::<Route> {} },
+                BootStatus::Failed(msg) => rsx! { BootError { message: msg } },
+            }
         }
     }
 }

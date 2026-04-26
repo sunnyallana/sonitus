@@ -46,6 +46,18 @@ pub async fn upsert(pool: &SqlitePool, album: &Album) -> Result<Album> {
     by_id(pool, &album.id).await
 }
 
+/// Fetch only the cover-art blob for an album. Used by the UI to render
+/// thumbnails without dragging the full row into memory. Returns None
+/// for albums without embedded art.
+pub async fn cover_art_for(pool: &SqlitePool, album_id: &str) -> Result<Option<Vec<u8>>> {
+    let row: Option<(Option<Vec<u8>>,)> =
+        sqlx::query_as("SELECT cover_art_blob FROM albums WHERE id = ?")
+            .bind(album_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|(blob,)| blob))
+}
+
 /// Fetch an album by ID.
 pub async fn by_id(pool: &SqlitePool, id: &str) -> Result<Album> {
     sqlx::query_as::<_, Album>("SELECT * FROM albums WHERE id = ?")

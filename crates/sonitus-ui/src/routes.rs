@@ -16,7 +16,9 @@ use crate::components::library::library_home::LibraryHome;
 use crate::components::library::tracks_table::TracksTable;
 use crate::components::player::now_playing_full::NowPlayingFull;
 use crate::components::playlists::playlist_detail::PlaylistDetail;
+use crate::components::playlists::playlist_editor::PlaylistEditor;
 use crate::components::playlists::playlists_list::PlaylistsList;
+use crate::components::playlists::smart_playlist_editor::SmartPlaylistEditor;
 use crate::components::privacy::audit_log_viewer::AuditLogViewer;
 use crate::components::privacy::consent_manager::ConsentManager;
 use crate::components::privacy::privacy_dashboard::PrivacyDashboard;
@@ -58,6 +60,12 @@ pub enum Route {
 
         #[route("/playlists")]
         PlaylistsList {},
+
+        #[route("/playlists/smart/:id")]
+        SmartPlaylistEditor { id: String },
+
+        #[route("/playlists/:id/edit")]
+        PlaylistEditor { id: String },
 
         #[route("/playlists/:id")]
         PlaylistDetail { id: String },
