@@ -1,6 +1,8 @@
 //! Privacy dashboard — five guarantee status cards + traffic counter.
 
+use crate::app::use_app_handle;
 use crate::routes::Route;
+use crate::state::library_state::LibraryState;
 use dioxus::prelude::*;
 
 /// Privacy dashboard. The five status cards are always green when the
@@ -8,6 +10,32 @@ use dioxus::prelude::*;
 /// the corresponding card flips to red.
 #[component]
 pub fn PrivacyDashboard() -> Element {
+    let handle = use_app_handle();
+    let library_signal = use_context::<Signal<LibraryState>>();
+
+    // Read the audit log on a blocking thread and count entries from
+    // today (UTC). We re-fetch on every library_signal.version bump so
+    // the counter doesn't go stale across long-lived sessions.
+    let counter = use_resource(move || {
+        let h = handle.clone();
+        let _v = library_signal.read().version;
+        async move {
+            let h = h?;
+            let logger = h.audit.clone();
+            let entries = tokio::task::spawn_blocking(move || logger.read_entries())
+                .await
+                .ok()?
+                .ok()?;
+            let today = chrono::Utc::now().date_naive();
+            let count = entries
+                .iter()
+                .filter(|e| e.ts.date_naive() == today)
+                .count();
+            Some(count)
+        }
+    });
+    let count_today = counter.read_unchecked().flatten().unwrap_or(0);
+
     rsx! {
         section { class: "privacy-dashboard",
             h1 { "Privacy" }
@@ -44,7 +72,7 @@ pub fn PrivacyDashboard() -> Element {
             }
 
             div { class: "privacy-dashboard__counter",
-                p { "Outbound requests today: 0" }
+                p { "Outbound requests today: {count_today}" }
             }
 
             div { class: "privacy-dashboard__links",

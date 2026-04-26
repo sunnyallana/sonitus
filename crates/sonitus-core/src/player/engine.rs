@@ -341,10 +341,7 @@ impl EngineState {
             }
             PlayerCommand::SetVolume { amplitude } => {
                 self.volume = amplitude.clamp(0.0, 1.0);
-                // The current decoder applies its per-track gain when
-                // packets arrive. Real volume should be a separate
-                // multiplier in the output callback; for now we emit the
-                // event so the UI updates.
+                self.ring.set_volume(self.volume);
                 let _ = self.evt.send(PlayerEvent::VolumeChanged { amplitude: self.volume });
             }
             PlayerCommand::Next => {
@@ -376,6 +373,14 @@ impl EngineState {
             }
             PlayerCommand::ClearQueue => {
                 self.queue.clear();
+                self.emit_queue_changed();
+            }
+            PlayerCommand::RemoveFromQueue { index } => {
+                self.queue.remove_at(index);
+                self.emit_queue_changed();
+            }
+            PlayerCommand::MoveInQueue { from, to } => {
+                self.queue.move_item(from, to);
                 self.emit_queue_changed();
             }
             PlayerCommand::SetShuffle { enabled } => {

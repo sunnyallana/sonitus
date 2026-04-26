@@ -91,6 +91,52 @@ impl PlayQueue {
         self.regenerate_shuffle();
     }
 
+    /// Remove the item at `index`. Adjusts the cursor so the
+    /// currently-playing track stays selected. Removing the *current*
+    /// track is a no-op — the caller should stop or skip-next first.
+    /// Out-of-range indices are ignored.
+    pub fn remove_at(&mut self, index: usize) {
+        if index >= self.items.len() { return; }
+        if Some(index) == self.cursor { return; }
+        self.items.remove(index);
+        // Shift cursor down if we removed something before it.
+        if let Some(c) = self.cursor.as_mut() {
+            if index < *c { *c -= 1; }
+        }
+        self.regenerate_shuffle();
+    }
+
+    /// Move the item at `from` to position `to`. Both must be in range.
+    /// Items between are shifted to fill the gap. Cursor follows the
+    /// moved item if it was the current track, or shifts otherwise so
+    /// the same physical track stays current.
+    pub fn move_item(&mut self, from: usize, to: usize) {
+        if from >= self.items.len() || to >= self.items.len() || from == to {
+            return;
+        }
+        let item = self.items.remove(from);
+        self.items.insert(to, item);
+        // Update cursor.
+        if let Some(c) = self.cursor.as_mut() {
+            if *c == from {
+                *c = to;
+            } else {
+                let lo = from.min(to);
+                let hi = from.max(to);
+                if *c >= lo && *c <= hi {
+                    if from < to {
+                        // Items between (from, to] shifted up by one.
+                        *c -= 1;
+                    } else {
+                        // Items between [to, from) shifted down by one.
+                        *c += 1;
+                    }
+                }
+            }
+        }
+        self.regenerate_shuffle();
+    }
+
     /// Clear everything except the currently-playing track.
     pub fn clear(&mut self) {
         if let Some(c) = self.cursor {
@@ -274,6 +320,47 @@ mod tests {
         q.clear();
         assert_eq!(q.snapshot(), &["track-1".to_string()]);
         assert_eq!(q.current(), Some(&"track-1".into()));
+    }
+
+    #[test]
+    fn remove_at_skips_current_and_shifts_cursor() {
+        let mut q = PlayQueue::new();
+        q.replace(ids(4));
+        q.next(); // cursor on track-1
+
+        // Remove the currently-playing track: no-op.
+        q.remove_at(1);
+        assert_eq!(q.snapshot().len(), 4);
+
+        // Remove something before cursor: cursor shifts.
+        q.remove_at(0);
+        assert_eq!(q.current(), Some(&"track-1".into()));
+        assert_eq!(q.snapshot(), &["track-1".to_string(), "track-2".to_string(), "track-3".to_string()]);
+
+        // Remove something after cursor: cursor unchanged.
+        q.remove_at(2);
+        assert_eq!(q.current(), Some(&"track-1".into()));
+    }
+
+    #[test]
+    fn move_item_keeps_current_under_cursor() {
+        let mut q = PlayQueue::new();
+        q.replace(ids(4));
+        q.next();
+        q.next(); // cursor on track-2
+
+        // Move the current track from 2 → 0. Cursor follows it.
+        q.move_item(2, 0);
+        assert_eq!(q.current(), Some(&"track-2".into()));
+        assert_eq!(q.snapshot()[0], "track-2");
+
+        // Move a non-current track across the cursor: cursor shifts so
+        // the same physical track is still current.
+        q.replace(ids(4));
+        q.next(); // cursor on track-1
+        q.move_item(3, 0);
+        assert_eq!(q.current(), Some(&"track-1".into()));
+        assert_eq!(q.snapshot(), &["track-3".to_string(), "track-0".to_string(), "track-1".to_string(), "track-2".to_string()]);
     }
 
     #[test]

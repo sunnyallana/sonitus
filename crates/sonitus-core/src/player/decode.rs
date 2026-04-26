@@ -38,7 +38,6 @@ pub struct AudioRing {
     inner: Arc<Mutex<RingState>>,
 }
 
-#[derive(Default)]
 struct RingState {
     buffer: VecDeque<f32>,
     /// The format the OUTPUT (cpal) stream is running at — what we have
@@ -48,6 +47,23 @@ struct RingState {
     /// Frame count at output rate. Used by the engine to derive playback
     /// position from buffered/written samples.
     frames_written: u64,
+    /// Linear amplitude multiplier applied to every sample in `fill()`.
+    /// Lives here (rather than as a separate atomic) because the cpal
+    /// callback already holds the ring's lock while draining — so reading
+    /// it costs nothing extra. The engine updates it via `set_volume`.
+    volume: f32,
+}
+
+impl Default for RingState {
+    fn default() -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            output_rate_hz: 0,
+            output_channels: 0,
+            frames_written: 0,
+            volume: 1.0,
+        }
+    }
 }
 
 /// Maximum buffered samples (interleaved, all channels). At 48 kHz stereo
@@ -119,16 +135,25 @@ impl AudioRing {
     pub fn buffered_samples(&self) -> usize {
         self.inner.lock().buffer.len()
     }
+
+    /// Set the output volume (linear amplitude, `0.0..=1.0`). Applied by
+    /// the cpal callback as it drains samples in `fill()`. Changes take
+    /// effect on the next callback (~ buffer_size frames of latency at
+    /// most), so the volume slider feels responsive.
+    pub fn set_volume(&self, amplitude: f32) {
+        self.inner.lock().volume = amplitude.clamp(0.0, 1.0);
+    }
 }
 
 impl SampleSource for AudioRing {
     fn fill(&mut self, out: &mut [f32]) -> usize {
         let mut state = self.inner.lock();
+        let vol = state.volume;
         let mut written = 0;
         while written < out.len() {
             match state.buffer.pop_front() {
                 Some(s) => {
-                    out[written] = s;
+                    out[written] = s * vol;
                     written += 1;
                 }
                 None => break,

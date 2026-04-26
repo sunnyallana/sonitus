@@ -1,7 +1,25 @@
 //! Add-source wizard.
 //!
-//! Currently only the **local** source kind is fully wired end-to-end.
-//! Cloud sources sketch UI but their OAuth handshake is a follow-up.
+//! Each source kind has its own configure form (step 1). On submit, the
+//! form persists the source row + encrypted credentials and hands off to
+//! the shared scanning step (2). After a successful scan the source is
+//! visible in the database; a restart is currently required for it to
+//! appear in `AppHandle::sources` for live playback (the source registry
+//! is built at boot).
+//!
+//! Currently fully wired:
+//! - Local folder
+//! - HTTP server (no auth)
+//! - Amazon S3 / MinIO / R2 (access key + secret key)
+//!
+//! Disabled with a "needs OAuth setup" hint:
+//! - Google Drive, Dropbox, OneDrive — these require provider-issued
+//!   client_id + client_secret pairs that aren't bundled with Sonitus
+//!   for privacy reasons. Wire them up by setting the env vars
+//!   `SONITUS_GOOGLE_CLIENT_ID`, etc., and rebuilding.
+//!
+//! Disabled because the feature flag is off in this build:
+//! - SMB / NAS — turn on the `smb` feature in `sonitus-core` to enable.
 
 use crate::app::use_app_handle;
 use crate::orchestrator::AppHandle;
@@ -16,21 +34,36 @@ use std::sync::Arc;
 
 /// Visibility + form state for the wizard. Provided as a Signal at the
 /// SourcesList level so the "+ Add source" button and the wizard share state.
-///
-/// PartialEq is implemented manually because `Arc<AtomicBool>` doesn't
-/// derive it; the cancel flag is transient and excluded from equality.
 #[derive(Debug, Clone, Default)]
 pub struct WizardState {
     /// Whether the dialog is currently shown.
     pub open: bool,
     /// Current step (0 = kind picker, 1 = configure, 2 = scanning).
     pub step: u8,
-    /// Selected kind. Currently only "local" is fully wired.
+    /// Selected kind (`local` | `http` | `s3`).
     pub kind: String,
     /// User-provided name.
     pub name: String,
-    /// User-provided path (local).
+
+    // ── Per-kind config fields. Only the fields relevant to `kind` are
+    //    used; the rest stay empty. Keeping them flat (rather than an
+    //    enum) keeps the per-kind component code straightforward and
+    //    avoids cloning a big enum payload on every keystroke.
+    /// Local: filesystem path. HTTP: base URL.
     pub path: String,
+    /// S3: bucket name.
+    pub s3_bucket: String,
+    /// S3: optional key prefix.
+    pub s3_prefix: String,
+    /// S3: region name.
+    pub s3_region: String,
+    /// S3: optional endpoint URL (MinIO/R2).
+    pub s3_endpoint: String,
+    /// S3: access key.
+    pub s3_access_key: String,
+    /// S3: secret key.
+    pub s3_secret_key: String,
+
     /// Live progress while step == 2.
     pub progress: Option<ScanProgress>,
     /// Error string from the scan, if any.
@@ -40,27 +73,48 @@ pub struct WizardState {
     /// Cancel flag the scanner reads cooperatively.
     pub cancel_flag: Option<Arc<AtomicBool>>,
     /// Human-readable description of what the scan task is doing right now.
-    /// Updated by spawn_scan / scanner.run so the user can see where things
-    /// are stuck if anything hangs.
     pub stage: String,
-    /// Append-only log of stage transitions with timestamps. Shown in the
-    /// debug panel.
+    /// Append-only log of stage transitions with timestamps.
     pub stage_log: Vec<String>,
-    /// Pending request to start a scan. ConfigureLocal sets this; an effect
-    /// in AddSourceWizard picks it up and spawns the scan in the wizard's
-    /// own scope. Routing via state is required because tasks spawned from
-    /// ConfigureLocal would die when ConfigureLocal unmounts on step change.
+    /// Pending request to start a scan.
     pub scan_request: Option<ScanRequest>,
 }
 
-/// Marker that a scan should be started. Held briefly in `WizardState`
-/// while AddSourceWizard's effect picks it up and clears it.
+/// Marker that a scan should be started. Held briefly while the wizard
+/// effect picks it up and clears it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ScanRequest {
-    /// User-chosen display name for the source.
-    pub name: String,
-    /// Local filesystem path to scan.
-    pub path: PathBuf,
+pub enum ScanRequest {
+    /// Local folder scan.
+    Local {
+        /// Display name for the source.
+        name: String,
+        /// Folder to scan.
+        path: PathBuf,
+    },
+    /// Plain HTTP base URL.
+    Http {
+        /// Display name.
+        name: String,
+        /// Base URL (parsed before insertion).
+        base_url: String,
+    },
+    /// Amazon S3 / S3-compatible bucket.
+    S3 {
+        /// Display name.
+        name: String,
+        /// Bucket name.
+        bucket: String,
+        /// Optional prefix to scope into a sub-folder.
+        prefix: String,
+        /// AWS region.
+        region: String,
+        /// Optional endpoint URL (MinIO, R2).
+        endpoint_url: Option<String>,
+        /// Access key.
+        access_key: String,
+        /// Secret key.
+        secret_key: String,
+    },
 }
 
 impl PartialEq for WizardState {
@@ -70,13 +124,19 @@ impl PartialEq for WizardState {
             && self.kind == other.kind
             && self.name == other.name
             && self.path == other.path
+            && self.s3_bucket == other.s3_bucket
+            && self.s3_prefix == other.s3_prefix
+            && self.s3_region == other.s3_region
+            && self.s3_endpoint == other.s3_endpoint
+            && self.s3_access_key == other.s3_access_key
+            // intentionally not comparing s3_secret_key — secrets must
+            // not influence equality (would let a noisy diff-engine peek)
             && self.progress == other.progress
             && self.error == other.error
             && self.done == other.done
             && self.stage == other.stage
             && self.stage_log.len() == other.stage_log.len()
             && self.scan_request == other.scan_request
-        // cancel_flag intentionally not compared.
     }
 }
 
@@ -92,7 +152,6 @@ fn set_stage(wizard: &mut Signal<WizardState>, stage: impl Into<String>) {
     let mut w = wizard.write();
     w.stage = stage;
     w.stage_log.push(line);
-    // Cap the log at 100 entries so memory stays bounded on very long scans.
     if w.stage_log.len() > 100 {
         let drop_count = w.stage_log.len() - 100;
         w.stage_log.drain(..drop_count);
@@ -105,18 +164,9 @@ pub fn AddSourceWizard() -> Element {
     let handle = use_app_handle();
     let library_signal = use_context::<Signal<LibraryState>>();
 
-    // The scan task lives here, in the wizard's scope, NOT in
-    // ConfigureLocal. Reason: ConfigureLocal unmounts the moment
-    // step transitions to 2, and Dioxus tasks are tied to their
-    // calling scope — so a spawn from ConfigureLocal::on_start gets
-    // cancelled before its body runs. AddSourceWizard stays mounted
-    // for the entire duration of `wizard.open == true`, so spawns
-    // started here survive the ConfigureLocal → Scanning swap.
     use_effect(move || {
-        // Read scan_request to subscribe — re-runs when it changes.
         let request = wizard.read().scan_request.clone();
         let Some(req) = request else { return; };
-        // Clear immediately so we never double-spawn.
         wizard.write().scan_request = None;
         let cancel = wizard
             .read()
@@ -127,13 +177,13 @@ pub fn AddSourceWizard() -> Element {
             wizard.write().error = Some("App handle unavailable".into());
             return;
         };
-        spawn_scan(handle, req.name, req.path, wizard, library_signal, cancel);
+        spawn_scan(handle, req, wizard, library_signal, cancel);
     });
 
     if !wizard.read().open {
         return rsx! {};
     }
-    let step = wizard.read().step;
+    let snap = wizard.read().clone();
 
     rsx! {
         div { class: "wizard-backdrop",
@@ -141,11 +191,15 @@ pub fn AddSourceWizard() -> Element {
             div { class: "wizard", role: "dialog", aria_modal: "true",
                 onclick: move |evt| { evt.stop_propagation(); },
                 Header {}
-                StepIndicator { active: step }
+                StepIndicator { active: snap.step }
                 div { class: "wizard__body",
-                    match step {
+                    match snap.step {
                         0 => rsx! { KindPicker {} },
-                        1 => rsx! { ConfigureLocal {} },
+                        1 => match snap.kind.as_str() {
+                            "http" => rsx! { ConfigureHttp {} },
+                            "s3" => rsx! { ConfigureS3 {} },
+                            _ => rsx! { ConfigureLocal {} },
+                        },
                         _ => rsx! { Scanning {} },
                     }
                 }
@@ -189,18 +243,30 @@ fn StepIndicator(active: u8) -> Element {
 #[component]
 fn KindPicker() -> Element {
     let mut wizard = use_context::<Signal<WizardState>>();
+
     let on_pick_local = move |_| {
         let mut w = wizard.write();
         w.kind = "local".to_string();
         w.step = 1;
-        if w.name.is_empty() {
-            w.name = "Local Music".to_string();
-        }
+        if w.name.is_empty() { w.name = "Local Music".to_string(); }
         if w.path.is_empty() {
             if let Some(d) = dirs::audio_dir() {
                 w.path = d.to_string_lossy().to_string();
             }
         }
+    };
+    let on_pick_http = move |_| {
+        let mut w = wizard.write();
+        w.kind = "http".to_string();
+        w.step = 1;
+        if w.name.is_empty() { w.name = "HTTP server".to_string(); }
+    };
+    let on_pick_s3 = move |_| {
+        let mut w = wizard.write();
+        w.kind = "s3".to_string();
+        w.step = 1;
+        if w.name.is_empty() { w.name = "S3 bucket".to_string(); }
+        if w.s3_region.is_empty() { w.s3_region = "us-east-1".to_string(); }
     };
 
     rsx! {
@@ -213,12 +279,36 @@ fn KindPicker() -> Element {
                 strong { "Local folder" }
                 span { class: "kind-card__sub", "Index music on this computer" }
             }
-            DisabledKindCard { icon: "🟢", title: "Google Drive", sub: "Coming soon" }
-            DisabledKindCard { icon: "🟧", title: "Amazon S3",    sub: "Coming soon" }
-            DisabledKindCard { icon: "🖥️", title: "SMB / NAS",    sub: "Coming soon" }
-            DisabledKindCard { icon: "🌐", title: "HTTP server",  sub: "Coming soon" }
-            DisabledKindCard { icon: "🟦", title: "Dropbox",      sub: "Coming soon" }
-            DisabledKindCard { icon: "🟩", title: "OneDrive",     sub: "Coming soon" }
+            button { class: "kind-card", onclick: on_pick_http,
+                span { class: "kind-card__icon", "🌐" }
+                strong { "HTTP server" }
+                span { class: "kind-card__sub", "Index a directory listing" }
+            }
+            button { class: "kind-card", onclick: on_pick_s3,
+                span { class: "kind-card__icon", "🟧" }
+                strong { "S3 / R2 / MinIO" }
+                span { class: "kind-card__sub", "Bucket with audio files" }
+            }
+            DisabledKindCard {
+                icon: "🟢",
+                title: "Google Drive",
+                sub: "Needs OAuth credentials".to_string(),
+            }
+            DisabledKindCard {
+                icon: "🟦",
+                title: "Dropbox",
+                sub: "Needs OAuth credentials".to_string(),
+            }
+            DisabledKindCard {
+                icon: "🟩",
+                title: "OneDrive",
+                sub: "Needs OAuth credentials".to_string(),
+            }
+            DisabledKindCard {
+                icon: "🖥️",
+                title: "SMB / NAS",
+                sub: "Enable the `smb` feature".to_string(),
+            }
         }
     }
 }
@@ -237,20 +327,15 @@ fn DisabledKindCard(icon: String, title: String, sub: String) -> Element {
 #[component]
 fn ConfigureLocal() -> Element {
     let mut wizard = use_context::<Signal<WizardState>>();
-    let handle = use_app_handle();
-    let library_signal = use_context::<Signal<LibraryState>>();
-
-    let snapshot = wizard.read().clone();
-    let name_val = snapshot.name.clone();
-    let path_val = snapshot.path.clone();
+    let snap = wizard.read().clone();
+    let name_val = snap.name.clone();
+    let path_val = snap.path.clone();
 
     let on_name = move |evt: FormEvent| { wizard.write().name = evt.value(); };
     let on_path = move |evt: FormEvent| { wizard.write().path = evt.value(); };
     let on_back = move |_| { wizard.write().step = 0; };
 
     let on_browse = move |_| {
-        // rfd is sync; spawn_blocking so we don't block Dioxus's local pool
-        // while the OS dialog is up.
         let mut w = wizard;
         let initial = w.read().path.clone();
         dioxus::prelude::spawn(async move {
@@ -270,11 +355,6 @@ fn ConfigureLocal() -> Element {
         });
     };
 
-    // Hold onto these locally to silence the unused-variable warning; the
-    // actual scan now runs from AddSourceWizard's effect, not from here.
-    let _ = handle;
-    let _ = library_signal;
-
     let on_start = move |_| {
         let snap = wizard.read().clone();
         let path = PathBuf::from(&snap.path);
@@ -286,23 +366,16 @@ fn ConfigureLocal() -> Element {
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut w = wizard.write();
-            w.step = 2;
-            w.error = None;
-            w.progress = None;
-            w.done = false;
-            w.cancel_flag = Some(cancel);
-            // Hand off the request to AddSourceWizard's effect, which
-            // owns the spawned task in a scope that survives our unmount.
-            w.scan_request = Some(ScanRequest {
-                name: snap.name.clone(),
-                path,
-            });
-        }
-        // ConfigureLocal will unmount on the next render now that step==2;
-        // that's fine — the effect in AddSourceWizard is what drives the
-        // scan from here on.
+        let mut w = wizard.write();
+        w.step = 2;
+        w.error = None;
+        w.progress = None;
+        w.done = false;
+        w.cancel_flag = Some(cancel);
+        w.scan_request = Some(ScanRequest::Local {
+            name: snap.name.clone(),
+            path,
+        });
     };
 
     let start_disabled = name_val.trim().is_empty() || path_val.trim().is_empty();
@@ -331,15 +404,185 @@ fn ConfigureLocal() -> Element {
                     }
                     button { class: "btn btn--ghost", onclick: on_browse, "Browse..." }
                 }
-                span { class: "field__hint",
-                    "Tip: paste a path or use Browse to pick a folder. The default is your OS Music folder."
-                }
             }
-
-            if let Some(err) = &snapshot.error {
+            if let Some(err) = &snap.error {
                 p { class: "wizard__error", "{err}" }
             }
+            div { class: "wizard__footer",
+                button { class: "btn btn--ghost", onclick: on_back, "← Back" }
+                button {
+                    class: "btn btn--primary",
+                    disabled: start_disabled,
+                    onclick: on_start,
+                    "Start scan →"
+                }
+            }
+        }
+    }
+}
 
+#[component]
+fn ConfigureHttp() -> Element {
+    let mut wizard = use_context::<Signal<WizardState>>();
+    let snap = wizard.read().clone();
+
+    let on_name = move |evt: FormEvent| { wizard.write().name = evt.value(); };
+    let on_url = move |evt: FormEvent| { wizard.write().path = evt.value(); };
+    let on_back = move |_| { wizard.write().step = 0; };
+
+    let on_start = move |_| {
+        let snap = wizard.read().clone();
+        let url = snap.path.trim().to_string();
+        if url::Url::parse(&url).is_err() {
+            wizard.write().error = Some(
+                "That doesn't look like a URL. Try https://example.com/music/.".into()
+            );
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut w = wizard.write();
+        w.step = 2;
+        w.error = None;
+        w.progress = None;
+        w.done = false;
+        w.cancel_flag = Some(cancel);
+        w.scan_request = Some(ScanRequest::Http {
+            name: snap.name.clone(),
+            base_url: url,
+        });
+    };
+
+    let start_disabled = snap.name.trim().is_empty() || snap.path.trim().is_empty();
+
+    rsx! {
+        div { class: "wizard__configure",
+            label { class: "field",
+                span { class: "field__label", "Name" }
+                input {
+                    class: "input",
+                    r#type: "text",
+                    value: "{snap.name}",
+                    oninput: on_name,
+                    placeholder: "HTTP server",
+                }
+            }
+            label { class: "field",
+                span { class: "field__label", "Base URL" }
+                input {
+                    class: "input",
+                    r#type: "url",
+                    value: "{snap.path}",
+                    oninput: on_url,
+                    placeholder: "https://example.com/music/",
+                }
+                span { class: "field__hint",
+                    "Sonitus expects directory listings at this URL. Use a trailing slash."
+                }
+            }
+            if let Some(err) = &snap.error {
+                p { class: "wizard__error", "{err}" }
+            }
+            div { class: "wizard__footer",
+                button { class: "btn btn--ghost", onclick: on_back, "← Back" }
+                button {
+                    class: "btn btn--primary",
+                    disabled: start_disabled,
+                    onclick: on_start,
+                    "Start scan →"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ConfigureS3() -> Element {
+    let mut wizard = use_context::<Signal<WizardState>>();
+    let snap = wizard.read().clone();
+
+    let on_name = move |evt: FormEvent| { wizard.write().name = evt.value(); };
+    let on_bucket = move |evt: FormEvent| { wizard.write().s3_bucket = evt.value(); };
+    let on_prefix = move |evt: FormEvent| { wizard.write().s3_prefix = evt.value(); };
+    let on_region = move |evt: FormEvent| { wizard.write().s3_region = evt.value(); };
+    let on_endpoint = move |evt: FormEvent| { wizard.write().s3_endpoint = evt.value(); };
+    let on_access = move |evt: FormEvent| { wizard.write().s3_access_key = evt.value(); };
+    let on_secret = move |evt: FormEvent| { wizard.write().s3_secret_key = evt.value(); };
+    let on_back = move |_| { wizard.write().step = 0; };
+
+    let on_start = move |_| {
+        let snap = wizard.read().clone();
+        if snap.s3_bucket.trim().is_empty() {
+            wizard.write().error = Some("Bucket name can't be empty.".into());
+            return;
+        }
+        if snap.s3_access_key.trim().is_empty() || snap.s3_secret_key.is_empty() {
+            wizard.write().error = Some("Access key and secret key are required.".into());
+            return;
+        }
+        let endpoint = if snap.s3_endpoint.trim().is_empty() {
+            None
+        } else {
+            Some(snap.s3_endpoint.trim().to_string())
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut w = wizard.write();
+        w.step = 2;
+        w.error = None;
+        w.progress = None;
+        w.done = false;
+        w.cancel_flag = Some(cancel);
+        w.scan_request = Some(ScanRequest::S3 {
+            name: snap.name.clone(),
+            bucket: snap.s3_bucket.trim().to_string(),
+            prefix: snap.s3_prefix.trim().to_string(),
+            region: snap.s3_region.trim().to_string(),
+            endpoint_url: endpoint,
+            access_key: snap.s3_access_key.trim().to_string(),
+            secret_key: snap.s3_secret_key.clone(),
+        });
+    };
+
+    let start_disabled = snap.name.trim().is_empty()
+        || snap.s3_bucket.trim().is_empty()
+        || snap.s3_access_key.trim().is_empty()
+        || snap.s3_secret_key.is_empty();
+
+    rsx! {
+        div { class: "wizard__configure",
+            label { class: "field",
+                span { class: "field__label", "Name" }
+                input { class: "input", r#type: "text", value: "{snap.name}", oninput: on_name }
+            }
+            label { class: "field",
+                span { class: "field__label", "Bucket" }
+                input { class: "input", r#type: "text", value: "{snap.s3_bucket}", oninput: on_bucket, placeholder: "my-music-bucket" }
+            }
+            label { class: "field",
+                span { class: "field__label", "Prefix (optional)" }
+                input { class: "input", r#type: "text", value: "{snap.s3_prefix}", oninput: on_prefix, placeholder: "audio/" }
+            }
+            label { class: "field",
+                span { class: "field__label", "Region" }
+                input { class: "input", r#type: "text", value: "{snap.s3_region}", oninput: on_region, placeholder: "us-east-1" }
+            }
+            label { class: "field",
+                span { class: "field__label", "Endpoint URL (optional, for MinIO/R2)" }
+                input { class: "input", r#type: "text", value: "{snap.s3_endpoint}", oninput: on_endpoint, placeholder: "https://s3.example.com" }
+            }
+            label { class: "field",
+                span { class: "field__label", "Access key" }
+                input { class: "input", r#type: "text", value: "{snap.s3_access_key}", oninput: on_access, autocomplete: "off" }
+            }
+            label { class: "field",
+                span { class: "field__label", "Secret key" }
+                input { class: "input", r#type: "password", value: "{snap.s3_secret_key}", oninput: on_secret, autocomplete: "off" }
+                span { class: "field__hint",
+                    "Stored encrypted at rest with the vault key — never written to disk in plaintext."
+                }
+            }
+            if let Some(err) = &snap.error {
+                p { class: "wizard__error", "{err}" }
+            }
             div { class: "wizard__footer",
                 button { class: "btn btn--ghost", onclick: on_back, "← Back" }
                 button {
@@ -359,7 +602,6 @@ fn Scanning() -> Element {
     let snapshot = wizard.read().clone();
 
     let close = move |_| { wizard.set(WizardState::default()); };
-
     let cancel = move |_| {
         if let Some(flag) = &wizard.read().cancel_flag {
             flag.store(true, Ordering::Relaxed);
@@ -395,7 +637,8 @@ fn Scanning() -> Element {
                     }
                 }
                 p { class: "wizard__hint",
-                    "Visit the Tracks, Albums, or Artists pages to browse your library."
+                    "Visit the Tracks, Albums, or Artists pages to browse your library. "
+                    "Restart Sonitus once to enable streaming from cloud sources."
                 }
                 div { class: "wizard__footer",
                     button { class: "btn btn--primary", onclick: close, "Done" }
@@ -432,10 +675,6 @@ fn Scanning() -> Element {
                 div { class: "wizard__progress",
                     div { class: "wizard__progress-bar wizard__progress-bar--indeterminate" }
                 }
-
-                // Debug log: shows the last several stage transitions with
-                // timestamps. Lets users diagnose stuck scans without
-                // needing access to the dx terminal.
                 details { class: "wizard__debug",
                     summary { "Debug log ({snapshot.stage_log.len()} entries)" }
                     pre { class: "wizard__debug-log",
@@ -444,7 +683,6 @@ fn Scanning() -> Element {
                         }
                     }
                 }
-
                 div { class: "wizard__footer",
                     button { class: "btn btn--ghost", onclick: cancel, "Cancel scan" }
                 }
@@ -455,68 +693,42 @@ fn Scanning() -> Element {
 
 fn spawn_scan(
     handle: AppHandle,
-    name: String,
-    path: PathBuf,
+    request: ScanRequest,
     wizard: Signal<WizardState>,
     library_signal: Signal<LibraryState>,
     cancel: Arc<AtomicBool>,
 ) {
     let mut library_signal = library_signal;
-    let mut wizard_outer = wizard; // Signals are Copy; rename for clarity vs the inner `wizard_for_progress`.
+    let mut wizard_outer = wizard;
     dioxus::prelude::spawn(async move {
         set_stage(&mut wizard_outer, "spawn_scan: task started");
-
         let id = uuid::Uuid::new_v4().to_string();
-        let config_json = serde_json::json!({
-            "path": path.to_string_lossy().to_string(),
-        })
-        .to_string();
 
-        set_stage(
-            &mut wizard_outer,
-            format!("inserting sources row (id={})", &id[..8]),
-        );
-        if let Err(e) = queries::sources::insert(
-            handle.library.vault(),
-            &id,
-            &name,
-            "local",
-            &config_json,
-            None,
-        )
-        .await
-        {
-            set_stage(&mut wizard_outer, format!("INSERT FAILED: {e}"));
-            wizard_outer.write().error = Some(format!("Failed to save source: {e}"));
-            return;
-        }
-        set_stage(&mut wizard_outer, "sources row inserted; building LocalSource");
+        // ── Build provider + insert source row, per-kind ─────────────────
+        let provider_result = build_provider(&handle, &id, &request).await;
+        let (source, name) = match provider_result {
+            Ok(p) => p,
+            Err(e) => {
+                set_stage(&mut wizard_outer, format!("provider build failed: {e}"));
+                wizard_outer.write().error = Some(e);
+                return;
+            }
+        };
 
-        let source: Arc<dyn SourceProvider> = Arc::new(
-            sonitus_core::sources::local::LocalSource::new(id.clone(), name.clone(), path.clone()),
-        );
+        set_stage(&mut wizard_outer, "running scanner");
         let scanner = Scanner::new(source, handle.library.pool().clone());
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ScanProgress>(64);
 
-        set_stage(&mut wizard_outer, "spawning progress drain task");
         let mut wizard_for_progress = wizard_outer;
         let cancel_for_progress = cancel.clone();
         let progress_task = dioxus::prelude::spawn(async move {
-            tracing::info!("progress drain task: started");
             while let Some(p) = rx.recv().await {
-                if cancel_for_progress.load(Ordering::Relaxed) {
-                    tracing::info!("progress drain task: cancelled by user");
-                    break;
-                }
+                if cancel_for_progress.load(Ordering::Relaxed) { break; }
                 wizard_for_progress.write().progress = Some(p);
             }
-            tracing::info!("progress drain task: rx closed, exiting");
         });
 
-        set_stage(&mut wizard_outer, "calling Scanner::run (will set scan_state, read pre-existing tracks, then walk)");
         let run_result = scanner.run(tx).await;
-        set_stage(&mut wizard_outer, format!("Scanner::run returned: ok={}", run_result.is_ok()));
-
         match run_result {
             Ok(report) => {
                 if cancel.load(Ordering::Relaxed) {
@@ -542,6 +754,7 @@ fn spawn_scan(
             }
         }
         let _ = progress_task;
+        let _ = name;
 
         set_stage(&mut wizard_outer, "refreshing library summary");
         if let Ok(summary) = handle.library.summary().await {
@@ -554,6 +767,118 @@ fn spawn_scan(
         if let Ok(sources) = queries::sources::list_all(handle.library.pool()).await {
             library_signal.write().sources = sources;
         }
-        set_stage(&mut wizard_outer, "spawn_scan: task done");
+        let next = library_signal.peek().version.wrapping_add(1);
+        library_signal.write().version = next;
     });
+}
+
+/// Persist the source row + credentials and construct the matching
+/// `SourceProvider`. Returns `(provider, name)`.
+async fn build_provider(
+    handle: &AppHandle,
+    id: &str,
+    request: &ScanRequest,
+) -> Result<(Arc<dyn SourceProvider>, String), String> {
+    use sonitus_core::crypto::types::SourceCredential;
+
+    match request {
+        ScanRequest::Local { name, path } => {
+            let config_json = serde_json::json!({
+                "path": path.to_string_lossy().to_string(),
+            })
+            .to_string();
+            queries::sources::insert(
+                handle.library.vault(),
+                id,
+                name,
+                "local",
+                &config_json,
+                None,
+            )
+            .await
+            .map_err(|e| format!("Failed to save source: {e}"))?;
+            let provider: Arc<dyn SourceProvider> = Arc::new(
+                sonitus_core::sources::local::LocalSource::new(
+                    id.to_string(),
+                    name.clone(),
+                    path.clone(),
+                ),
+            );
+            Ok((provider, name.clone()))
+        }
+        ScanRequest::Http { name, base_url } => {
+            let url = url::Url::parse(base_url)
+                .map_err(|e| format!("Invalid URL: {e}"))?;
+            let config_json = serde_json::json!({
+                "base_url": url.to_string(),
+            })
+            .to_string();
+            queries::sources::insert(
+                handle.library.vault(),
+                id,
+                name,
+                "http",
+                &config_json,
+                None,
+            )
+            .await
+            .map_err(|e| format!("Failed to save source: {e}"))?;
+            let provider: Arc<dyn SourceProvider> = Arc::new(
+                sonitus_core::sources::http::HttpSource::new(
+                    id.to_string(),
+                    name.clone(),
+                    url,
+                    handle.audit.clone(),
+                ),
+            );
+            Ok((provider, name.clone()))
+        }
+        #[cfg(feature = "s3")]
+        ScanRequest::S3 {
+            name, bucket, prefix, region, endpoint_url, access_key, secret_key,
+        } => {
+            let config_json = serde_json::json!({
+                "bucket": bucket,
+                "prefix": prefix,
+                "region": region,
+                "endpoint_url": endpoint_url,
+            })
+            .to_string();
+            let creds = SourceCredential {
+                kind: "s3".to_string(),
+                primary: access_key.clone(),
+                secondary: Some(secret_key.clone()),
+                expires_at: None,
+            };
+            queries::sources::insert(
+                handle.library.vault(),
+                id,
+                name,
+                "s3",
+                &config_json,
+                Some(&creds),
+            )
+            .await
+            .map_err(|e| format!("Failed to save source: {e}"))?;
+            let provider = sonitus_core::sources::s3::S3Source::new(
+                id.to_string(),
+                name.clone(),
+                bucket.clone(),
+                prefix.clone(),
+                access_key.clone(),
+                secret_key.clone(),
+                region.clone(),
+                endpoint_url.clone(),
+                handle.audit.clone(),
+            )
+            .await
+            .map_err(|e| format!("Couldn't connect to S3: {e}"))?;
+            let provider: Arc<dyn SourceProvider> = Arc::new(provider);
+            Ok((provider, name.clone()))
+        }
+        #[cfg(not(feature = "s3"))]
+        ScanRequest::S3 { .. } => Err(
+            "S3 support isn't compiled into this build. Enable the `s3` feature.".to_string()
+        ),
+    }
 }

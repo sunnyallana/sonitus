@@ -48,6 +48,7 @@ pub fn App() -> Element {
     install_download_state();
     install_search_state();
     crate::components::playlists::add_to_playlist_dialog::install_add_to_playlist_state();
+    crate::components::player::queue_panel::install_queue_panel_state();
     // NewPlaylistState lives at app scope so the add-to-playlist dialog
     // can chain into "+ New playlist" from outside the playlists page.
     use_context_provider(|| {

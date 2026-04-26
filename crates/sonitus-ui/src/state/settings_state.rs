@@ -6,7 +6,8 @@
 //! `%APPDATA%/sonitus/config.toml` on Windows.
 
 use dioxus::prelude::*;
-use sonitus_core::config::{AppConfig, BufferSize, ReplayGainMode, Theme};
+use sonitus_core::config::{AppConfig, BufferSize, LibraryView, ReplayGainMode, Theme};
+use std::path::PathBuf;
 
 /// User-facing settings state.
 #[derive(Debug, Clone)]
@@ -59,6 +60,37 @@ impl SettingsState {
         // small ad-hoc rider next to it. Keeping this simple: AppConfig
         // gets a new field below.
         self.config.last_volume = v;
+        self.persist();
+    }
+
+    /// Update crossfade duration + persist.
+    pub fn set_crossfade_secs(&mut self, secs: f32) {
+        self.config.crossfade_secs = secs.clamp(0.0, 12.0);
+        self.persist();
+    }
+    /// Update gapless flag + persist.
+    pub fn set_gapless(&mut self, on: bool) {
+        self.config.gapless_enabled = on;
+        self.persist();
+    }
+    /// Update output device override + persist. `None` = system default.
+    pub fn set_output_device(&mut self, name: Option<String>) {
+        self.config.output_device = name;
+        self.persist();
+    }
+    /// Update cache size limit (MiB) + persist.
+    pub fn set_cache_max_mb(&mut self, mb: u64) {
+        self.config.cache_max_mb = mb.max(1);
+        self.persist();
+    }
+    /// Update download location override + persist.
+    pub fn set_download_location(&mut self, path: Option<PathBuf>) {
+        self.config.download_location = path;
+        self.persist();
+    }
+    /// Update library default view + persist.
+    pub fn set_library_view(&mut self, view: LibraryView) {
+        self.config.library_view = view;
         self.persist();
     }
 

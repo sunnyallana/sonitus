@@ -56,6 +56,21 @@ pub enum PlayerCommand {
     },
     /// Remove every track from the queue except the currently-playing one.
     ClearQueue,
+    /// Remove the track at `index` from the queue. Removing the
+    /// currently-playing item is a no-op — caller should `Stop` or `Next`
+    /// first if they want that.
+    RemoveFromQueue {
+        /// Position in the queue (0-based).
+        index: usize,
+    },
+    /// Move a queue item from one position to another. Cursor follows
+    /// the current track.
+    MoveInQueue {
+        /// Current position.
+        from: usize,
+        /// New position.
+        to: usize,
+    },
     /// Set whether shuffle is enabled.
     SetShuffle {
         /// Whether shuffle is on.

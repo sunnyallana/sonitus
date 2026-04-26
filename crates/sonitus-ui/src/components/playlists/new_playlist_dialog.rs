@@ -9,8 +9,8 @@ use crate::state::library_state::LibraryState;
 use dioxus::prelude::*;
 use sonitus_core::library::queries;
 
-/// State signal for the new-playlist dialog. Provided at the Playlists
-/// list level so the "+ New playlist" button + dialog can communicate.
+/// State signal for the new-playlist dialog. Provided at app scope so any
+/// component can open it (the queue panel uses this to "save the queue").
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NewPlaylistState {
     /// Whether the dialog is open.
@@ -21,6 +21,10 @@ pub struct NewPlaylistState {
     pub description: String,
     /// Error message from the last attempt, if any.
     pub error: Option<String>,
+    /// Track IDs to append to the playlist immediately after creation.
+    /// Used by "Save queue as playlist" so the user gets one combined
+    /// flow instead of "create empty playlist, then bulk-add tracks."
+    pub seed_track_ids: Vec<String>,
 }
 
 /// The dialog component itself. Renders nothing when state.open is false.
@@ -51,23 +55,43 @@ pub fn NewPlaylistDialog() -> Element {
         }
         let desc = snap.description.trim().to_string();
         let desc_opt = if desc.is_empty() { None } else { Some(desc) };
+        let seed_ids = snap.seed_track_ids.clone();
         dioxus::prelude::spawn(async move {
-            let res = queries::playlists::create_manual(
-                handle.library.pool(),
+            let pool = handle.library.pool();
+            let created = match queries::playlists::create_manual(
+                pool,
                 &name,
                 desc_opt.as_deref(),
             )
-            .await;
-            match res {
-                Ok(_) => {
-                    state.set(NewPlaylistState::default());
-                    let next = library_signal.peek().version.wrapping_add(1);
-                    library_signal.write().version = next;
-                }
+            .await
+            {
+                Ok(p) => p,
                 Err(e) => {
                     state.write().error = Some(format!("Failed: {e}"));
+                    return;
+                }
+            };
+
+            // Append any seed tracks (e.g. from "Save queue as playlist").
+            // Errors here don't undo creation — we surface the partial
+            // failure but keep the new playlist around since the user
+            // probably still wants it.
+            for tid in &seed_ids {
+                if let Err(e) =
+                    queries::playlists::append_track(pool, &created.id, tid).await
+                {
+                    state.write().error = Some(format!(
+                        "Created '{name}', but adding tracks failed: {e}"
+                    ));
+                    let next = library_signal.peek().version.wrapping_add(1);
+                    library_signal.write().version = next;
+                    return;
                 }
             }
+
+            state.set(NewPlaylistState::default());
+            let next = library_signal.peek().version.wrapping_add(1);
+            library_signal.write().version = next;
         });
     };
 
@@ -80,10 +104,21 @@ pub fn NewPlaylistDialog() -> Element {
                 onsubmit: on_submit,
                 onclick: move |evt| { evt.stop_propagation(); },
                 header { class: "wizard__header",
-                    h1 { "New playlist" }
+                    h1 {
+                        if snap.seed_track_ids.is_empty() {
+                            "New playlist"
+                        } else {
+                            "Save queue as playlist"
+                        }
+                    }
                     button { r#type: "button", class: "wizard__close", onclick: close, "×" }
                 }
                 div { class: "wizard__body",
+                    if !snap.seed_track_ids.is_empty() {
+                        p { class: "wizard__hint",
+                            "{snap.seed_track_ids.len()} tracks from the queue will be saved."
+                        }
+                    }
                     label { class: "field",
                         span { class: "field__label", "Name" }
                         input {

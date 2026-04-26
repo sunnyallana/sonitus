@@ -2,7 +2,7 @@
 
 use crate::state::settings_state::SettingsState;
 use dioxus::prelude::*;
-use sonitus_core::config::Theme;
+use sonitus_core::config::{LibraryView, Theme};
 
 /// Appearance settings.
 #[component]
@@ -16,6 +16,15 @@ pub fn AppearanceSettings() -> Element {
         Theme::System => "system",
     };
     let accent = snap.config.accent_color.clone();
+    let library_view = snap.config.library_view;
+
+    let on_library_view = move |evt: FormEvent| {
+        let new = match evt.value().as_str() {
+            "list" => LibraryView::List,
+            _ => LibraryView::Grid,
+        };
+        settings.write().set_library_view(new);
+    };
 
     let on_theme = move |evt: FormEvent| {
         let new = match evt.value().as_str() {
@@ -53,9 +62,9 @@ pub fn AppearanceSettings() -> Element {
             }
             label { class: "field",
                 span { class: "field__label", "Library default view" }
-                select { class: "select",
-                    option { value: "grid", selected: true, "Grid" }
-                    option { value: "list", "List" }
+                select { class: "select", onchange: on_library_view,
+                    option { value: "grid", selected: matches!(library_view, LibraryView::Grid), "Grid" }
+                    option { value: "list", selected: matches!(library_view, LibraryView::List), "List" }
                 }
             }
         }
